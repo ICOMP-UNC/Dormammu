@@ -6,19 +6,22 @@
 float ground_humidity;
 volatile uint16_t adc_buffer[BUFFER_SIZE];
 static QueueHandle_t xUartQueue;
-//semaphore for uart queue
+// semaphore for uart queue
 SemaphoreHandle_t xSemaphore;
-void vApplicationStackOverflowHook(TaskHandle_t xTask __attribute__((unused)), char *pcTaskName __attribute__ ((unused))) {
+void vApplicationStackOverflowHook(TaskHandle_t xTask __attribute__((unused)), char* pcTaskName __attribute__((unused)))
+{
     (void)xTask;
     (void)pcTaskName;
-    while (true){
-        #ifdef DEBUG_BUILD
+    while (true)
+    {
+#ifdef DEBUG_BUILD
         printf("Stack overflow in task %s\n", pcTaskName);
-        #endif
+#endif
     }
 }
 
-void prvSetupHardware(void){
+void prvSetupHardware(void)
+{
     // Set up system clock at the defined frequency
     rcc_clock_setup_pll(&rcc_hse_configs[PLL_CLOCK]);
 
@@ -30,7 +33,6 @@ void prvSetupHardware(void){
     rcc_periph_clock_enable(RCC_USART1);
     rcc_periph_clock_enable(RCC_DMA1);
     rcc_periph_clock_enable(RCC_TIM1);
-
 
     // GPIO config
     gpio_set_mode(GPIOA, GPIO_MODE_INPUT, GPIO_CNF_INPUT_ANALOG, GPIO0);
@@ -48,7 +50,6 @@ void prvSetupHardware(void){
     dma_set_read_from_peripheral(DMA1, DMA_CHANNEL1);
     dma_enable_memory_increment_mode(DMA1, DMA_CHANNEL1);
     dma_enable_channel(DMA1, DMA_CHANNEL1);
-     
 
     /* USART config*/
     gpio_set_mode(GPIOA, GPIO_MODE_OUTPUT_50_MHZ, GPIO_CNF_OUTPUT_ALTFN_PUSHPULL, GPIO_USART1_TX);
@@ -59,15 +60,14 @@ void prvSetupHardware(void){
     usart_set_mode(USART1, USART_MODE_TX_RX);
     usart_set_parity(USART1, USART_PARITY_NONE);
     usart_set_flow_control(USART1, USART_FLOWCONTROL_NONE);
-    usart_enable(USART1); 
+    usart_enable(USART1);
 
     // Timer config
     timer_set_mode(TIM1, TIM_CR1_CKD_CK_INT, TIM_CR1_CMS_EDGE, TIM_CR1_DIR_UP);
-    timer_set_prescaler(TIM1, TIMER_PRESCALE_VALUE); 
+    timer_set_prescaler(TIM1, TIMER_PRESCALE_VALUE);
     timer_set_period(TIM1, TIMER_PERIOD);
     timer_enable_counter(TIM1);
     timer_enable_irq(TIM1, TIM_DIER_UIE);
-
 
     // ADC config
     adc_power_off(ADC1);
@@ -88,81 +88,89 @@ void prvSetupHardware(void){
     adc_calibrate(ADC1);
     adc_enable_external_trigger_regular(ADC1, ADC_CR2_EXTSEL_SWSTART);
     adc_start_conversion_regular(ADC1);
-    
-
 }
 
-void prvSetupTasks(void){
+void prvSetupTasks(void)
+{
     xUartQueue = xQueueCreate(10, BUFFER_MESSAGE_SIZE);
-    if(xUartQueue == NULL){
-        #ifdef DEBUG_BUILD
+    if (xUartQueue == NULL)
+    {
+#ifdef DEBUG_BUILD
         printf("Queue creation failed\n");
-        #endif
-        while(1);
+#endif
+        while (1);
     }
     xTaskCreate(xTaskLedSwitching, "LED_Switching", configMINIMAL_STACK_SIZE, tskLED_PRIORITY, 1, NULL);
-    xTaskCreate(xTaskGroundHumidity, "GroundHumidityMonitor", configMINIMAL_STACK_SIZE, tskGROUND_HUMIDITY_PRIORITY, 1, NULL);
+    xTaskCreate(
+        xTaskGroundHumidity, "GroundHumidityMonitor", configMINIMAL_STACK_SIZE, tskGROUND_HUMIDITY_PRIORITY, 1, NULL);
     xTaskCreate(xTaskSendMessage, "SendMessage", configMINIMAL_STACK_SIZE, tskIDLE_PRIORITY, 1, NULL);
 }
 
-void xTaskLedSwitching(void *args __attribute__ ((unused))){
+void xTaskLedSwitching(void* args __attribute__((unused)))
+{
     // LED blinks proportionally to ground humidity
-    while (true){
+    while (true)
+    {
 
         gpio_toggle(GPIOC, GPIO13);
 
         printf("LED toggled\n");
-        if(ground_humidity>0){
-            vTaskDelay(pdMS_TO_TICKS((ground_humidity/100)*SECOND_DELAY));
+        if (ground_humidity > 0)
+        {
+            vTaskDelay(pdMS_TO_TICKS((ground_humidity / 100) * SECOND_DELAY));
         }
-        
-        
-        
     }
-
 }
 
-void xTaskGroundHumidity(void *args __attribute__ ((unused))){
-        char message[BUFFER_MESSAGE_SIZE];
-    while (true){
-        ground_humidity=0.0;
-        for (int i=0; i<BUFFER_SIZE; i++){
-            ground_humidity+=((ADC_FULL_SCALE-adc_buffer[i])/ADC_FULL_SCALE)*100;
+void xTaskGroundHumidity(void* args __attribute__((unused)))
+{
+    char message[BUFFER_MESSAGE_SIZE];
+    while (true)
+    {
+        ground_humidity = 0.0;
+        for (int i = 0; i < BUFFER_SIZE; i++)
+        {
+            ground_humidity += ((ADC_FULL_SCALE - adc_buffer[i]) / ADC_FULL_SCALE) * 100;
         }
-        ground_humidity/=BUFFER_SIZE;
+        ground_humidity /= BUFFER_SIZE;
         snprintf(message, BUFFER_MESSAGE_SIZE, "Ground humidity: %.2f%%", ground_humidity);
         xQueueSend(xUartQueue, "Ground humidity: %f", portMAX_DELAY);
         vTaskDelay(pdMS_TO_TICKS(SECOND_DELAY));
     }
 }
-void xTaskSendMessage(void *args __attribute__ ((unused))){
+void xTaskSendMessage(void* args __attribute__((unused)))
+{
     char message[BUFFER_MESSAGE_SIZE];
-    while (true){
-        if(xQueueReceive(xUartQueue, message, portMAX_DELAY) == pdTRUE){
+    while (true)
+    {
+        if (xQueueReceive(xUartQueue, message, portMAX_DELAY) == pdTRUE)
+        {
             printf("%s\n", message);
         }
     }
 }
 
-
 #ifdef DEBUG_BUILD
-int _write(int file, char *ptr, int len){
+int _write(int file, char* ptr, int len)
+{
     (void)file;
-    
-    for(int i=0; i<len; i++){
-        if(ptr[i] == '\n'){
+
+    for (int i = 0; i < len; i++)
+    {
+        if (ptr[i] == '\n')
+        {
             usart_send_blocking(USART1, '\r');
         }
         usart_send_blocking(USART1, ptr[i]);
     }
     return len;
-    
 }
 #endif
 
-void dma1_channel1_isr(void){
-    if(dma_get_interrupt_flag(DMA1, DMA_CHANNEL1, DMA_TCIF)){
+void dma1_channel1_isr(void)
+{
+    if (dma_get_interrupt_flag(DMA1, DMA_CHANNEL1, DMA_TCIF))
+    {
         dma_clear_interrupt_flags(DMA1, DMA_CHANNEL1, DMA_TCIF);
     }
 }
-

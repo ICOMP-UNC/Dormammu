@@ -10,41 +10,39 @@
 #ifdef DEBUG_BUILD
 #include <unistd.h>
 
-
-int _write(int file, char *ptr, int len);
+int _write(int file, char* ptr, int len);
 #endif
 
 #include "FreeRTOS.h"
-#include "task.h"
 #include "queue.h"
 #include "semphr.h"
-#include "timers.h"
 #include "stdio.h"
+#include "task.h"
+#include "timers.h"
 
 #include <libopencm3/cm3/nvic.h>
 #include <libopencm3/stm32/adc.h>
 #include <libopencm3/stm32/dma.h>
 #include <libopencm3/stm32/exti.h>
 #include <libopencm3/stm32/gpio.h>
+#include <libopencm3/stm32/i2c.h>
 #include <libopencm3/stm32/rcc.h>
 #include <libopencm3/stm32/timer.h>
 #include <libopencm3/stm32/usart.h>
-#include <libopencm3/stm32/i2c.h>
 
 /* UART configuration */
-#define BAUD_RATE 115200
+#define BAUD_RATE   115200
 #define WORD_LENGTH 8
 
-
-#define TIMER_PRESCALE_VALUE 72000
-#define TIMER_PERIOD 60000
-#define BUFFER_SIZE 64
+#define TIMER_PRESCALE_VALUE   72000
+#define TIMER_PERIOD           60000
+#define BUFFER_SIZE            64
 #define NUMBER_OF_ADC_CHANNELS 1
-#define PLL_CLOCK RCC_CLOCK_HSE8_72MHZ
-#define SECOND_DELAY 1000
-#define ADC_FULL_SCALE 4096.0
+#define PLL_CLOCK              RCC_CLOCK_HSE8_72MHZ
+#define SECOND_DELAY           1000
+#define ADC_FULL_SCALE         4096.0
 
-#define tskLED_PRIORITY tskIDLE_PRIORITY + 1
+#define tskLED_PRIORITY             tskIDLE_PRIORITY + 1
 #define tskGROUND_HUMIDITY_PRIORITY tskIDLE_PRIORITY + 2
 
 #define BUFFER_MESSAGE_SIZE 64
@@ -56,7 +54,7 @@ int _write(int file, char *ptr, int len);
 void prvSetupHardware(void);
 /**
  * @brief Initialize and configure tasks.
- *  
+ *
  */
 void prvSetupTasks(void);
 
@@ -65,18 +63,18 @@ void prvSetupTasks(void);
  * @brief Test function to toggle LED with blinking rate proportional to ground humidity
  * @param args Task arguments (not used)
  */
-void xTaskLedSwitching(void *args __attribute__ ((unused)));
+void xTaskLedSwitching(void* args __attribute__((unused)));
 /**
  * @brief Task to monitor ground humidity, gathered by the ADC and transferred to memory by DMA
- * 
+ *
  * | Humidity | Voltage | ADC Value |
  * |----------|---------|-----------|
  * | 0%       | 3.3V    | 4096      |
  * | 100%     | 0V      | 0         |
  */
-void xTaskGroundHumidity(void *args __attribute__ ((unused)));
+void xTaskGroundHumidity(void* args __attribute__((unused)));
 /**
  * @brief Task to send messages over UART
  * @param args Task arguments (not used)
  */
-void xTaskSendMessage(void *args __attribute__ ((unused)));
+void xTaskSendMessage(void* args __attribute__((unused)));
