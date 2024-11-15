@@ -4,7 +4,8 @@
 
 #include <firmware.h>
 
-int main(void) {
+int main(void)
+{
     // Initialize the firmware
     prvSetupHardware();
 
@@ -15,7 +16,9 @@ int main(void) {
     vTaskStartScheduler();
 
     // Main loop
-    while (1) {
+    while (1)
+    {
+
         // Do something
     }
 }
