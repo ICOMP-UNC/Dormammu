@@ -175,9 +175,9 @@ void xTaskTemperature(void* args __attribute__((unused)))
         temperature = 0.0;
         for (int i = ADC_CHANNEL_TEMPERATURE; i < ADC_BUFFER_TOTAL_SIZE; i += NUMBER_OF_ADC_CHANNELS)
         {
-            temperature += ((adc_buffer[i] / ADC_FULL_SCALE) * 3300) / 10;
+            temperature += adc_buffer[i];
         }
-        temperature /= BUFFER_SIZE;
+        temperature=(MAX_TEMP*temperature) / (ADC_TEMP_MAX_VALUE * BUFFER_SIZE);
         snprintf(message, sizeof(message), "Temperature: %.2fºC", temperature);
         if (xSemaphoreTake(xCommunicationSemaphore, portMAX_DELAY) == pdTRUE)
         {

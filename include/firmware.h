@@ -50,7 +50,8 @@ int _write(int file, char* ptr, int len);
 #define tskTEMPERATURE_PRIORITY     tskIDLE_PRIORITY + 2
 #define tskCOMMUNICATION_PRIORITY   tskIDLE_PRIORITY + 2
 #define BUFFER_MESSAGE_SIZE 64
-
+#define ADC_TEMP_MAX_VALUE 1861
+#define MAX_TEMP 150
 /* PWM definitions */
 #define MIN_TEMPERATURE 20.0
 #define MAX_TEMPERATURE 60.0
@@ -98,6 +99,10 @@ void xTaskSendMessage(void* args __attribute__((unused)));
 /**
  * @brief Task to monitor temperature using LM35 sensor and ADC channel 1, then send it over UART and update PWM duty cycle
  * @param args Task arguments (not used)
+ *  | Temperature | Voltage | ADC Value |
+ *  |-------------|---------|-----------|
+ *  | 0º C        | 0V      | 0         |
+ *  | 150 ºC      | 1.5V    | 1861      |
  */
 void xTaskTemperature(void* args __attribute__((unused)));
 /**
