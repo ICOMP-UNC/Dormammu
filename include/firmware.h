@@ -42,12 +42,20 @@ int _write(int file, char* ptr, int len);
 #define PLL_CLOCK              RCC_CLOCK_HSE8_72MHZ
 #define SECOND_DELAY           1000
 #define ADC_FULL_SCALE         4096.0
-
+#define TEMPERATURE_THRESHOLD  25.0
+#define PWM_TIMER_PERIOD       1000
+#define DUTY_CYCLE_START       0
 #define tskLED_PRIORITY             tskIDLE_PRIORITY + 1
 #define tskGROUND_HUMIDITY_PRIORITY tskIDLE_PRIORITY + 2
 #define tskTEMPERATURE_PRIORITY     tskIDLE_PRIORITY + 2
 #define tskCOMMUNICATION_PRIORITY   tskIDLE_PRIORITY + 2
 #define BUFFER_MESSAGE_SIZE 64
+
+/* PWM definitions */
+#define MIN_TEMPERATURE 20.0
+#define MAX_TEMPERATURE 60.0
+#define MIN_DUTY_CYCLE 0
+#define MAX_DUTY_CYCLE 1000
 
 enum
 {
@@ -92,3 +100,7 @@ void xTaskSendMessage(void* args __attribute__((unused)));
  * @param args Task arguments (not used)
  */
 void xTaskTemperature(void* args __attribute__((unused)));
+
+void updatePWM(uint16_t duty_cycle);
+
+uint16_t mapTemperatureToDutyCycle(float temperature);
