@@ -96,11 +96,17 @@ void xTaskGroundHumidity(void* args __attribute__((unused)));
 void xTaskSendMessage(void* args __attribute__((unused)));
 
 /**
- * @brief Task to monitor temperature using LM35 sensor and ADC channel 1
+ * @brief Task to monitor temperature using LM35 sensor and ADC channel 1, then send it over UART and update PWM duty cycle
  * @param args Task arguments (not used)
  */
 void xTaskTemperature(void* args __attribute__((unused)));
-
+/**
+ * @brief Function to update Timer1 OC value to change PWM duty cycle
+ * @param duty_cycle Duty cycle value to be set
+ */
 void updatePWM(uint16_t duty_cycle);
-
+/**
+ * @brief Function to map temperature to PWM duty cycle, linear mapping between MIN_TEMPERATURE and MAX_TEMPERATURE
+ * @param temperature Temperature value to be mapped
+ */
 uint16_t mapTemperatureToDutyCycle(float temperature);
