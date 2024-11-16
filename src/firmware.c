@@ -11,6 +11,7 @@ static QueueHandle_t xUartQueue;
 SemaphoreHandle_t xCommunicationSemaphore;
 struct timekeeper time, sunset, sunrise = {0, 0, 0};
 uint8_t sun_debounce_flag = 0;
+TaskHandle_t xFireHandler = NULL;
 volatile char uart_buffer[UART_BUFFER_SIZE];
 volatile uint8_t uart_buffer_index = 0;
 void vApplicationStackOverflowHook(TaskHandle_t xTask __attribute__((unused)), char* pcTaskName __attribute__((unused)))
@@ -120,13 +121,20 @@ void prvSetupHardware(void)
     timer_enable_irq(TIM3, TIM_DIER_UIE);
     nvic_enable_irq(NVIC_TIM3_IRQ);
 
-    // exti_setup on PA5
-    gpio_set_mode(GPIOA, GPIO_MODE_INPUT, GPIO_CNF_INPUT_PULL_UPDOWN, GPIO5);
+    // exti_setup on PA3
+    gpio_set_mode(GPIOA, GPIO_MODE_INPUT, GPIO_CNF_INPUT_PULL_UPDOWN, GPIO3);
     exti_select_source(EXTI3, GPIOA);
     exti_set_trigger(EXTI3, EXTI_TRIGGER_BOTH);
     exti_enable_request(EXTI3);
     nvic_enable_irq(NVIC_EXTI3_IRQ);
 
+    // exti_setup on PA2
+    gpio_set_mode(GPIOA, GPIO_MODE_INPUT, GPIO_CNF_INPUT_PULL_UPDOWN, GPIO2);
+    exti_select_source(EXTI2, GPIOA);
+    exti_set_trigger(EXTI2, EXTI_TRIGGER_FALLING);
+    exti_enable_request(EXTI2);
+    nvic_enable_irq(NVIC_EXTI2_IRQ);
+    
 }
 
 void prvSetupTasks(void)
@@ -141,11 +149,36 @@ void prvSetupTasks(void)
 #endif
         while (1);
     }
-    //xTaskCreate(xTaskLedSwitching, "LED_Switching", configMINIMAL_STACK_SIZE, tskLED_PRIORITY, 1, NULL);
+    // xTaskCreate(xTaskLedSwitching, "LED_Switching", configMINIMAL_STACK_SIZE, tskLED_PRIORITY, 1, NULL);
     xTaskCreate(
         xTaskGroundHumidity, "GroundHumidityMonitor", configMINIMAL_STACK_SIZE, tskGROUND_HUMIDITY_PRIORITY, 1, NULL);
     xTaskCreate(xTaskSendMessage, "SendMessage", configMINIMAL_STACK_SIZE, tskCOMMUNICATION_PRIORITY, 1, NULL);
     xTaskCreate(xTaskTemperature, "TemperatureMonitor", configMINIMAL_STACK_SIZE, tskTEMPERATURE_PRIORITY, 1, NULL);
+    xTaskCreate(xTaskCreateReport, "CreateReport", configMINIMAL_STACK_SIZE, tskCOMMUNICATION_PRIORITY, 1, NULL);
+}
+
+void xtaskFireAlarm(void* args __attribute__((unused)))
+{
+    char message[BUFFER_MESSAGE_SIZE];
+    uint8_t fire_alarm_times_counter = 0;
+    while (true)
+    {
+        fire_alarm_times_counter++;
+        snprintf(message, sizeof(message), "SOS! Fire alarm! Temperature: ");
+        strncat(message, float_to_string(temperature, NUMBER_OF_DECIMALS), sizeof(message));
+        if (xSemaphoreTake(xCommunicationSemaphore, portMAX_DELAY) == pdTRUE)
+        {
+            xQueueSend(xUartQueue, message, portMAX_DELAY);
+            xSemaphoreGive(xCommunicationSemaphore);
+        }
+        if (fire_alarm_times_counter > 15 && gpio_get(GPIOA, GPIO2))
+        {
+            nvic_enable_irq(NVIC_EXTI2_IRQ);
+            vTaskDelete(xFireHandler);
+            
+        }
+        vTaskDelay(pdMS_TO_TICKS(FIRE_ALARM_DELAY));
+    }
 }
 
 void xTaskLedSwitching(void* args __attribute__((unused)))
@@ -175,15 +208,10 @@ void xTaskGroundHumidity(void* args __attribute__((unused)))
             ground_humidity += ((ADC_FULL_SCALE - adc_buffer[i]) / ADC_FULL_SCALE) * 100;
         }
         ground_humidity /= BUFFER_SIZE;
-        snprintf(message, sizeof(message), "Ground humidity: %.2f", ground_humidity);
-        if (xSemaphoreTake(xCommunicationSemaphore, portMAX_DELAY) == pdTRUE)
-        {
-            xQueueSend(xUartQueue, message, portMAX_DELAY);
-            xSemaphoreGive(xCommunicationSemaphore);
-        }
-        vTaskDelay(pdMS_TO_TICKS(5 * SECOND_DELAY));
+        vTaskDelay(pdMS_TO_TICKS(MEASURE_DELAY));
     }
 }
+
 void xTaskSendMessage(void* args __attribute__((unused)))
 {
     char message[BUFFER_MESSAGE_SIZE];
@@ -193,6 +221,30 @@ void xTaskSendMessage(void* args __attribute__((unused)))
         {
             printf("%s\n", message);
         }
+    }
+}
+
+void xTaskCreateReport(void* args __attribute__((unused)))
+{
+    char message[BUFFER_MESSAGE_SIZE];
+    while (true)
+    {  
+        xSemaphoreTake(xCommunicationSemaphore, portMAX_DELAY);
+        sprintf(message, "Sunrise: %s ", get_time(sunrise));
+        xQueueSend(xUartQueue, message, portMAX_DELAY);
+        sprintf(message, "Sunset: %s ", get_time(sunset));
+        xQueueSend(xUartQueue, message, portMAX_DELAY);
+
+        sprintf(message, "Ground humidity: ");
+        strncat(message, float_to_string(ground_humidity, NUMBER_OF_DECIMALS), sizeof(message));
+        strncat(message, "%", sizeof(message));
+        xQueueSend(xUartQueue, message, portMAX_DELAY);
+        sprintf(message, "Temperature: ");
+        strncat(message, float_to_string(temperature, NUMBER_OF_DECIMALS), sizeof(message));
+        strncat(message, " C", sizeof(message));
+        xQueueSend(xUartQueue, message, portMAX_DELAY);
+        xSemaphoreGive(xCommunicationSemaphore);
+        vTaskDelay(pdMS_TO_TICKS(REPORT_DELAY));
     }
 }
 
@@ -207,15 +259,9 @@ void xTaskTemperature(void* args __attribute__((unused)))
             temperature += adc_buffer[i];
         }
         temperature = (MAX_TEMP * temperature) / (ADC_TEMP_MAX_VALUE * BUFFER_SIZE);
-        snprintf(message, sizeof(message), "Temperature: %.2fºC", temperature);
-        if (xSemaphoreTake(xCommunicationSemaphore, portMAX_DELAY) == pdTRUE)
-        {
-            xQueueSend(xUartQueue, message, portMAX_DELAY);
-            xSemaphoreGive(xCommunicationSemaphore);
-        }
         uint16_t duty_cycle = mapTemperatureToDutyCycle(temperature);
         updatePWM(duty_cycle);
-        vTaskDelay(pdMS_TO_TICKS(5 * SECOND_DELAY));
+        vTaskDelay(pdMS_TO_TICKS(MEASURE_DELAY));
     }
 }
 
@@ -290,10 +336,10 @@ void tim2_isr()
     }
 }
 
-char* get_time(struct timekeeper time)
+char* get_time(struct timekeeper printtime)
 {
-    char time_str[TIME_STRING_SIZE];
-    snprintf(time_str, sizeof(time_str), "%02d:%02d:%02d", time.hours, time.minutes, time.seconds);
+    static char time_str[TIME_STRING_SIZE];
+    snprintf(time_str, sizeof(time_str), "%02d:%02d:%02d", printtime.hours, printtime.minutes, printtime.seconds);
     return time_str;
 }
 
@@ -302,17 +348,15 @@ void usart1_isr(void)
     if (usart_get_flag(USART1, USART_SR_RXNE))
     {
         char received_char = usart_recv(USART1);
-        if (received_char == '\n' || uart_buffer_index >= UART_BUFFER_SIZE - 1)
+        while (!(received_char == '\n' || uart_buffer_index >= UART_BUFFER_SIZE - 1))
         {
-            uart_buffer[uart_buffer_index] = '\0';
-            uart_buffer_index = 0;
-            // Process the received message
-            process_received_message();
-        }
-        else
-        {
+            received_char = usart_recv(USART1);
             uart_buffer[uart_buffer_index++] = received_char;
         }
+        uart_buffer[uart_buffer_index] = '\0';
+        uart_buffer_index = 0;
+        // Process the received message
+        process_received_message();
     }
 }
 
@@ -325,9 +369,15 @@ void process_received_message()
         if (sscanf(uart_buffer + 3, "%02d%02d%02d", &hours, &minutes, &seconds) == 3)
         {
             // Update the clock variables
+            if(hours<24){
             time.hours = hours;
+            }
+            if(minutes<60){
             time.minutes = minutes;
+            }
+            if(seconds<60){
             time.seconds = seconds;
+            }
         }
     }
 }
@@ -340,7 +390,17 @@ void exti3_isr()
         timer_enable_counter(TIM3);
         sun_debounce_flag = 1;
         exti_reset_request(EXTI3);
+        gpio_toggle(GPIOC, GPIO13);
     }
+}
+
+void exti2_isr()
+{
+    if(xFireHandler == NULL){
+        xTaskCreate(xtaskFireAlarm, "FireAlarm", configMINIMAL_STACK_SIZE, tskFIRE_ALARM_PRIORITY, 1, xFireHandler);
+    }
+    exti_reset_request(EXTI2);
+    nvic_disable_irq(NVIC_EXTI2_IRQ);
 }
 
 void tim3_isr()
@@ -348,9 +408,9 @@ void tim3_isr()
     if (timer_get_flag(TIM3, TIM_SR_UIF))
     {
         timer_clear_flag(TIM3, TIM_SR_UIF);
-            if (sun_debounce_flag==1)
-            {
-            if(gpio_get(GPIOA, GPIO3))  //sensor send high signal when it is dark
+        if (sun_debounce_flag == 1)
+        {
+            if (gpio_get(GPIOA, GPIO3)) // sensor send high signal when it is dark
             {
                 sunset = time;
             }
@@ -359,7 +419,16 @@ void tim3_isr()
                 sunrise = time;
             }
             sun_debounce_flag = 0;
-            }
+        }
         timer_disable_counter(TIM3);
     }
+}
+
+char* float_to_string(float f, int number_of_decimals)
+{
+    static char buffer[32];
+    int whole = (int)f;
+    int decimal = (int)((f - whole) * 10 * number_of_decimals);
+    sprintf(buffer, "%d.%d", whole, decimal);
+    return buffer;
 }
