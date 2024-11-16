@@ -9,7 +9,14 @@ volatile uint16_t adc_buffer[ADC_BUFFER_TOTAL_SIZE];
 static QueueHandle_t xUartQueue;
 // semaphore for uart queue
 SemaphoreHandle_t xCommunicationSemaphore;
-
+struct timekeeper
+{
+    uint8_t hours;
+    uint8_t minutes;
+    uint8_t seconds;
+} time;
+volatile char uart_buffer[UART_BUFFER_SIZE];
+volatile uint8_t uart_buffer_index = 0;
 void vApplicationStackOverflowHook(TaskHandle_t xTask __attribute__((unused)), char* pcTaskName __attribute__((unused)))
 {
     (void)xTask;
@@ -35,6 +42,15 @@ void prvSetupHardware(void)
     rcc_periph_clock_enable(RCC_USART1);
     rcc_periph_clock_enable(RCC_DMA1);
     rcc_periph_clock_enable(RCC_TIM1);
+
+    // Clock timer config
+    timer_set_mode(TIM2, TIM_CR1_CKD_CK_INT, TIM_CR1_CMS_EDGE, TIM_CR1_DIR_UP);
+    rcc_periph_clock_enable(RCC_TIM2);
+    timer_set_prescaler(TIM2, TIMER_PRESCALE_VALUE);
+    timer_set_period(TIM2, TIMER_PERIOD_1S);
+    nvic_enable_irq(NVIC_TIM2_IRQ);
+    timer_enable_irq(TIM2, TIM_DIER_UIE);
+    timer_enable_counter(TIM2);
 
     // TIMER1 config for PWM
     rcc_periph_reset_pulse(RST_TIM1);
@@ -76,8 +92,9 @@ void prvSetupHardware(void)
     usart_set_mode(USART1, USART_MODE_TX_RX);
     usart_set_parity(USART1, USART_PARITY_NONE);
     usart_set_flow_control(USART1, USART_FLOWCONTROL_NONE);
+    usart_enable_rx_interrupt(USART1);
+    nvic_enable_irq(NVIC_USART1_IRQ);
     usart_enable(USART1);
-
     // ADC config
     adc_power_off(ADC1);
     adc_enable_dma(ADC1);
@@ -177,7 +194,7 @@ void xTaskTemperature(void* args __attribute__((unused)))
         {
             temperature += adc_buffer[i];
         }
-        temperature=(MAX_TEMP*temperature) / (ADC_TEMP_MAX_VALUE * BUFFER_SIZE);
+        temperature = (MAX_TEMP * temperature) / (ADC_TEMP_MAX_VALUE * BUFFER_SIZE);
         snprintf(message, sizeof(message), "Temperature: %.2fºC", temperature);
         if (xSemaphoreTake(xCommunicationSemaphore, portMAX_DELAY) == pdTRUE)
         {
@@ -236,4 +253,69 @@ uint16_t mapTemperatureToDutyCycle(float temperature)
 void updatePWM(uint16_t duty_cycle)
 {
     timer_set_oc_value(TIM1, TIM_OC1, duty_cycle);
+}
+
+void tim2_isr()
+{
+    if (timer_get_flag(TIM2, TIM_SR_UIF))
+    {
+        timer_clear_flag(TIM2, TIM_SR_UIF);
+        time.seconds++;
+        if (time.seconds == 60)
+        {
+            time.seconds = 0;
+            time.minutes++;
+            if (time.minutes == 60)
+            {
+                time.minutes = 0;
+                time.hours++;
+                if (time.hours == 24)
+                {
+                    time.hours = 0;
+                }
+            }
+        }
+    }
+}
+
+char* get_time()
+{
+    char time_str[TIME_STRING_SIZE];
+    snprintf(time_str, sizeof(time_str), "%02d:%02d:%02d", time.hours, time.minutes, time.seconds);
+    return time_str;
+}
+
+void usart1_isr(void)
+{
+    if (usart_get_flag(USART1, USART_SR_RXNE))
+    {
+        char received_char = usart_recv(USART1);
+        if (received_char == '\n' || uart_buffer_index >= UART_BUFFER_SIZE - 1)
+        {
+            uart_buffer[uart_buffer_index] = '\0';
+            uart_buffer_index = 0;
+            // Process the received message
+            process_received_message();
+        }
+        else
+        {
+            uart_buffer[uart_buffer_index++] = received_char;
+        }
+    }
+}
+
+void process_received_message()
+{
+    if (strncmp(uart_buffer, "clk", 3) == 0)
+    {
+        int hours, minutes, seconds;
+        // Extract the next 6 characters and parse them as HHMMSS
+        if (sscanf(uart_buffer + 3, "%02d%02d%02d", &hours, &minutes, &seconds) == 3)
+        {
+            // Update the clock variables
+            time.hours = hours;
+            time.minutes = minutes;
+            time.seconds = seconds;
+        }
+    }
 }
