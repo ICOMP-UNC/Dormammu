@@ -134,7 +134,6 @@ void prvSetupHardware(void)
     exti_set_trigger(EXTI2, EXTI_TRIGGER_FALLING);
     exti_enable_request(EXTI2);
     nvic_enable_irq(NVIC_EXTI2_IRQ);
-    
 }
 
 void prvSetupTasks(void)
@@ -171,12 +170,11 @@ void xtaskFireAlarm(void* args __attribute__((unused)))
             xQueueSend(xUartQueue, message, portMAX_DELAY);
             xSemaphoreGive(xCommunicationSemaphore);
         }
-        if (fire_alarm_times_counter > 5 && gpio_get(GPIOA, GPIO2))
+        if (fire_alarm_times_counter > FIRE_ALARM_REPEATS && gpio_get(GPIOA, GPIO2))
         {
             exti_reset_request(EXTI2);
             nvic_enable_irq(NVIC_EXTI2_IRQ);
             vTaskDelete(xFireHandler);
-            
         }
         vTaskDelay(pdMS_TO_TICKS(FIRE_ALARM_DELAY));
     }
@@ -229,7 +227,7 @@ void xTaskCreateReport(void* args __attribute__((unused)))
 {
     char message[BUFFER_MESSAGE_SIZE];
     while (true)
-    {  
+    {
         xSemaphoreTake(xCommunicationSemaphore, portMAX_DELAY);
         sprintf(message, "Sunrise: %s ", get_time(sunrise));
         xQueueSend(xUartQueue, message, portMAX_DELAY);
@@ -370,14 +368,17 @@ void process_received_message()
         if (sscanf(uart_buffer + 3, "%02d%02d%02d", &hours, &minutes, &seconds) == 3)
         {
             // Update the clock variables
-            if(hours<24){
-            time.hours = hours;
+            if (hours < 24)
+            {
+                time.hours = hours;
             }
-            if(minutes<60){
-            time.minutes = minutes;
+            if (minutes < 60)
+            {
+                time.minutes = minutes;
             }
-            if(seconds<60){
-            time.seconds = seconds;
+            if (seconds < 60)
+            {
+                time.seconds = seconds;
             }
         }
     }
@@ -397,7 +398,8 @@ void exti3_isr()
 
 void exti2_isr()
 {
-    if(xFireHandler == NULL){
+    if (xFireHandler == NULL)
+    {
         xTaskCreate(xtaskFireAlarm, "FireAlarm", configMINIMAL_STACK_SIZE, tskFIRE_ALARM_PRIORITY, 1, xFireHandler);
     }
     exti_reset_request(EXTI2);
