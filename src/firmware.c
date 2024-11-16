@@ -171,8 +171,9 @@ void xtaskFireAlarm(void* args __attribute__((unused)))
             xQueueSend(xUartQueue, message, portMAX_DELAY);
             xSemaphoreGive(xCommunicationSemaphore);
         }
-        if (fire_alarm_times_counter > 15 && gpio_get(GPIOA, GPIO2))
+        if (fire_alarm_times_counter > 5 && gpio_get(GPIOA, GPIO2))
         {
+            exti_reset_request(EXTI2);
             nvic_enable_irq(NVIC_EXTI2_IRQ);
             vTaskDelete(xFireHandler);
             
