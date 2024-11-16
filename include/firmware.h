@@ -34,29 +34,31 @@ int _write(int file, char* ptr, int len);
 #define BAUD_RATE   115200
 #define WORD_LENGTH 8
 
-#define TIMER_PRESCALE_VALUE   72000
-#define TIMER_PERIOD           60000
-#define BUFFER_SIZE            64
-#define NUMBER_OF_ADC_CHANNELS 2
-#define ADC_BUFFER_TOTAL_SIZE  (BUFFER_SIZE * NUMBER_OF_ADC_CHANNELS)
-#define PLL_CLOCK              RCC_CLOCK_HSE8_72MHZ
-#define SECOND_DELAY           1000
-#define ADC_FULL_SCALE         4096.0
-#define TEMPERATURE_THRESHOLD  25.0
-#define PWM_TIMER_PERIOD       1000
-#define DUTY_CYCLE_START       0
+#define TIMER_PERIOD_1S             10000
+#define TIMER_PRESCALE_VALUE        71999
+#define BUFFER_SIZE                 64
+#define NUMBER_OF_ADC_CHANNELS      2
+#define ADC_BUFFER_TOTAL_SIZE       (BUFFER_SIZE * NUMBER_OF_ADC_CHANNELS)
+#define PLL_CLOCK                   RCC_CLOCK_HSE8_72MHZ
+#define SECOND_DELAY                1000
+#define ADC_FULL_SCALE              4096.0
+#define TEMPERATURE_THRESHOLD       25.0
+#define PWM_TIMER_PERIOD            1000
+#define DUTY_CYCLE_START            0
 #define tskLED_PRIORITY             tskIDLE_PRIORITY + 1
 #define tskGROUND_HUMIDITY_PRIORITY tskIDLE_PRIORITY + 2
 #define tskTEMPERATURE_PRIORITY     tskIDLE_PRIORITY + 2
 #define tskCOMMUNICATION_PRIORITY   tskIDLE_PRIORITY + 2
-#define BUFFER_MESSAGE_SIZE 64
-#define ADC_TEMP_MAX_VALUE 1861
-#define MAX_TEMP 150
+#define BUFFER_MESSAGE_SIZE         64
+#define TIME_STRING_SIZE            9
+#define UART_BUFFER_SIZE            64
+#define ADC_TEMP_MAX_VALUE          1861
+#define MAX_TEMP                    150
 /* PWM definitions */
 #define MIN_TEMPERATURE 20.0
 #define MAX_TEMPERATURE 60.0
-#define MIN_DUTY_CYCLE 0
-#define MAX_DUTY_CYCLE 1000
+#define MIN_DUTY_CYCLE  0
+#define MAX_DUTY_CYCLE  1000
 
 enum
 {
@@ -97,7 +99,8 @@ void xTaskGroundHumidity(void* args __attribute__((unused)));
 void xTaskSendMessage(void* args __attribute__((unused)));
 
 /**
- * @brief Task to monitor temperature using LM35 sensor and ADC channel 1, then send it over UART and update PWM duty cycle
+ * @brief Task to monitor temperature using LM35 sensor and ADC channel 1, then send it over UART and update PWM duty
+ * cycle
  * @param args Task arguments (not used)
  *  | Temperature | Voltage | ADC Value |
  *  |-------------|---------|-----------|
@@ -115,3 +118,12 @@ void updatePWM(uint16_t duty_cycle);
  * @param temperature Temperature value to be mapped
  */
 uint16_t mapTemperatureToDutyCycle(float temperature);
+/**
+ * @brief Function to process received message from UART
+ * Currently parses checking for 'clk' to update time
+ */
+void process_received_message(void);
+/**
+ * @brief function to create a string with the current time
+ */
+char* get_time(void);
