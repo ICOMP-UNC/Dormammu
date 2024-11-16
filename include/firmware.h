@@ -59,12 +59,18 @@ int _write(int file, char* ptr, int len);
 #define MAX_TEMPERATURE 60.0
 #define MIN_DUTY_CYCLE  0
 #define MAX_DUTY_CYCLE  1000
-
 enum
 {
     ADC_CHANNEL_GROUND_HUMIDITY = 0,
     ADC_CHANNEL_TEMPERATURE = 1
 };
+
+extern struct timekeeper
+{
+    uint8_t hours;
+    uint8_t minutes;
+    uint8_t seconds;
+} time;
 
 /**
  * @brief Initialize and configure hardware.
@@ -125,5 +131,6 @@ uint16_t mapTemperatureToDutyCycle(float temperature);
 void process_received_message(void);
 /**
  * @brief function to create a string with the current time
+ * @param time Timekeeper struct with time values to be converted to string
  */
-char* get_time(void);
+char* get_time(struct timekeeper time);
