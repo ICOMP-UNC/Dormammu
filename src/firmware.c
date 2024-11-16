@@ -9,12 +9,8 @@ volatile uint16_t adc_buffer[ADC_BUFFER_TOTAL_SIZE];
 static QueueHandle_t xUartQueue;
 // semaphore for uart queue
 SemaphoreHandle_t xCommunicationSemaphore;
-struct timekeeper
-{
-    uint8_t hours;
-    uint8_t minutes;
-    uint8_t seconds;
-} time;
+struct timekeeper time, sunset, sunrise = {0, 0, 0};
+uint8_t sun_debounce_flag = 0;
 volatile char uart_buffer[UART_BUFFER_SIZE];
 volatile uint8_t uart_buffer_index = 0;
 void vApplicationStackOverflowHook(TaskHandle_t xTask __attribute__((unused)), char* pcTaskName __attribute__((unused)))
@@ -115,6 +111,22 @@ void prvSetupHardware(void)
     adc_calibrate(ADC1);
     adc_enable_external_trigger_regular(ADC1, ADC_CR2_EXTSEL_SWSTART);
     adc_start_conversion_regular(ADC1);
+
+    // TIM3 config for ISR rebounding
+    rcc_periph_clock_enable(RCC_TIM3);
+    timer_set_mode(TIM3, TIM_CR1_CKD_CK_INT, TIM_CR1_CMS_EDGE, TIM_CR1_DIR_UP);
+    timer_set_prescaler(TIM3, TIMER_PRESCALE_VALUE);
+    timer_set_period(TIM3, TIMER_PERIOD_1S);
+    timer_enable_irq(TIM3, TIM_DIER_UIE);
+    nvic_enable_irq(NVIC_TIM3_IRQ);
+
+    // exti_setup on PA5
+    gpio_set_mode(GPIOA, GPIO_MODE_INPUT, GPIO_CNF_INPUT_PULL_UPDOWN, GPIO5);
+    exti_select_source(EXTI3, GPIOA);
+    exti_set_trigger(EXTI3, EXTI_TRIGGER_BOTH);
+    exti_enable_request(EXTI3);
+    nvic_enable_irq(NVIC_EXTI3_IRQ);
+
 }
 
 void prvSetupTasks(void)
@@ -129,7 +141,7 @@ void prvSetupTasks(void)
 #endif
         while (1);
     }
-    xTaskCreate(xTaskLedSwitching, "LED_Switching", configMINIMAL_STACK_SIZE, tskLED_PRIORITY, 1, NULL);
+    //xTaskCreate(xTaskLedSwitching, "LED_Switching", configMINIMAL_STACK_SIZE, tskLED_PRIORITY, 1, NULL);
     xTaskCreate(
         xTaskGroundHumidity, "GroundHumidityMonitor", configMINIMAL_STACK_SIZE, tskGROUND_HUMIDITY_PRIORITY, 1, NULL);
     xTaskCreate(xTaskSendMessage, "SendMessage", configMINIMAL_STACK_SIZE, tskCOMMUNICATION_PRIORITY, 1, NULL);
@@ -278,7 +290,7 @@ void tim2_isr()
     }
 }
 
-char* get_time()
+char* get_time(struct timekeeper time)
 {
     char time_str[TIME_STRING_SIZE];
     snprintf(time_str, sizeof(time_str), "%02d:%02d:%02d", time.hours, time.minutes, time.seconds);
@@ -317,5 +329,37 @@ void process_received_message()
             time.minutes = minutes;
             time.seconds = seconds;
         }
+    }
+}
+
+void exti3_isr()
+{
+    if (exti_get_flag_status(EXTI3))
+    {
+        timer_set_counter(TIM3, 0);
+        timer_enable_counter(TIM3);
+        sun_debounce_flag = 1;
+        exti_reset_request(EXTI3);
+    }
+}
+
+void tim3_isr()
+{
+    if (timer_get_flag(TIM3, TIM_SR_UIF))
+    {
+        timer_clear_flag(TIM3, TIM_SR_UIF);
+            if (sun_debounce_flag==1)
+            {
+            if(gpio_get(GPIOA, GPIO3))  //sensor send high signal when it is dark
+            {
+                sunset = time;
+            }
+            else
+            {
+                sunrise = time;
+            }
+            sun_debounce_flag = 0;
+            }
+        timer_disable_counter(TIM3);
     }
 }
