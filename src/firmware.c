@@ -3,8 +3,7 @@
  */
 
 #include <firmware.h>
-float ground_humidity;
-float temperature;
+float ground_humidity, temperature, water_level, wind_speed, old_water_level, rainfall;
 volatile uint16_t adc_buffer[ADC_BUFFER_TOTAL_SIZE];
 static QueueHandle_t xUartSendQueue;
 static QueueHandle_t xUartReceiveQueue;
@@ -35,6 +34,7 @@ void prvSetupHardware(void)
 
     // Enable peripheral clocks
     rcc_periph_clock_enable(RCC_GPIOC);
+    rcc_periph_clock_enable(RCC_GPIOB);
     rcc_periph_clock_enable(RCC_GPIOA);
     rcc_periph_clock_enable(RCC_ADC1);
     rcc_periph_clock_enable(RCC_AFIO);
@@ -68,6 +68,7 @@ void prvSetupHardware(void)
     gpio_set_mode(GPIOA, GPIO_MODE_INPUT, GPIO_CNF_INPUT_ANALOG, GPIO0 | GPIO1);
     gpio_set_mode(GPIOC, GPIO_MODE_OUTPUT_2_MHZ, GPIO_CNF_OUTPUT_PUSHPULL, GPIO13);
     gpio_set_mode(GPIOA, GPIO_MODE_OUTPUT_50_MHZ, GPIO_CNF_OUTPUT_ALTFN_PUSHPULL, GPIO8);
+    gpio_set_mode(GPIOB, GPIO_MODE_INPUT, GPIO_CNF_INPUT_ANALOG, GPIO0 | GPIO1);
 
     // DMA config
     dma_channel_reset(DMA1, DMA_CHANNEL1);
@@ -81,7 +82,35 @@ void prvSetupHardware(void)
     dma_set_read_from_peripheral(DMA1, DMA_CHANNEL1);
     dma_enable_memory_increment_mode(DMA1, DMA_CHANNEL1);
     dma_enable_channel(DMA1, DMA_CHANNEL1);
-
+    /*
+        dma_set_peripheral_address(DMA1, DMA_CHANNEL2, (uint32_t)&ADC_DR(ADC1));
+        dma_set_memory_address(DMA1, DMA_CHANNEL2, (uint32_t)adc_buffer);
+        dma_set_number_of_data(DMA1, DMA_CHANNEL2, ADC_BUFFER_TOTAL_SIZE);
+        dma_set_memory_size(DMA1, DMA_CHANNEL2, DMA_CCR_MSIZE_16BIT);
+        dma_set_peripheral_size(DMA1, DMA_CHANNEL2, DMA_CCR_PSIZE_16BIT);
+        dma_enable_circular_mode(DMA1, DMA_CHANNEL2);
+        dma_set_read_from_peripheral(DMA1, DMA_CHANNEL2);
+        dma_enable_memory_increment_mode(DMA1, DMA_CHANNEL2);
+        dma_enable_channel(DMA1, DMA_CHANNEL2);
+        dma_set_peripheral_address(DMA1, DMA_CHANNEL3, (uint32_t)&ADC_DR(ADC1));
+        dma_set_memory_address(DMA1, DMA_CHANNEL3, (uint32_t)adc_buffer);
+        dma_set_number_of_data(DMA1, DMA_CHANNEL3, ADC_BUFFER_TOTAL_SIZE);
+        dma_set_memory_size(DMA1, DMA_CHANNEL3, DMA_CCR_MSIZE_16BIT);
+        dma_set_peripheral_size(DMA1, DMA_CHANNEL3, DMA_CCR_PSIZE_16BIT);
+        dma_enable_circular_mode(DMA1, DMA_CHANNEL3);
+        dma_set_read_from_peripheral(DMA1, DMA_CHANNEL3);
+        dma_enable_memory_increment_mode(DMA1, DMA_CHANNEL3);
+        dma_enable_channel(DMA1, DMA_CHANNEL3);
+        dma_set_peripheral_address(DMA1, DMA_CHANNEL4, (uint32_t)&ADC_DR(ADC1));
+        dma_set_memory_address(DMA1, DMA_CHANNEL4, (uint32_t)adc_buffer);
+        dma_set_number_of_data(DMA1, DMA_CHANNEL4, ADC_BUFFER_TOTAL_SIZE);
+        dma_set_memory_size(DMA1, DMA_CHANNEL4, DMA_CCR_MSIZE_16BIT);
+        dma_set_peripheral_size(DMA1, DMA_CHANNEL4, DMA_CCR_PSIZE_16BIT);
+        dma_enable_circular_mode(DMA1, DMA_CHANNEL4);
+        dma_set_read_from_peripheral(DMA1, DMA_CHANNEL4);
+        dma_enable_memory_increment_mode(DMA1, DMA_CHANNEL4);
+        dma_enable_channel(DMA1, DMA_CHANNEL4);
+    */
     /* USART config*/
     gpio_set_mode(GPIOA, GPIO_MODE_OUTPUT_50_MHZ, GPIO_CNF_OUTPUT_ALTFN_PUSHPULL, GPIO_USART1_TX);
     gpio_set_mode(GPIOA, GPIO_MODE_INPUT, GPIO_CNF_INPUT_FLOAT, GPIO_USART1_RX);
@@ -103,11 +132,12 @@ void prvSetupHardware(void)
     adc_set_right_aligned(ADC1);
 
     // Set up ADC channel sequence and sample time
-    const uint8_t adc_channels[NUMBER_OF_ADC_CHANNELS] = {ADC_CHANNEL0, ADC_CHANNEL1};
+    const uint8_t adc_channels[NUMBER_OF_ADC_CHANNELS] = {ADC_CHANNEL0, ADC_CHANNEL1, ADC_CHANNEL8, ADC_CHANNEL9};
     adc_set_regular_sequence(ADC1, NUMBER_OF_ADC_CHANNELS, adc_channels);
-    adc_set_sample_time(ADC1, DMA_CHANNEL1, ADC_SMPR_SMP_55DOT5CYC);
-    adc_set_sample_time(ADC1, DMA_CHANNEL2, ADC_SMPR_SMP_55DOT5CYC);
-
+    adc_set_sample_time(ADC1, ADC_CHANNEL0, ADC_SMPR_SMP_55DOT5CYC);
+    adc_set_sample_time(ADC1, ADC_CHANNEL1, ADC_SMPR_SMP_55DOT5CYC);
+    adc_set_sample_time(ADC1, ADC_CHANNEL8, ADC_SMPR_SMP_55DOT5CYC);
+    adc_set_sample_time(ADC1, ADC_CHANNEL9, ADC_SMPR_SMP_55DOT5CYC);
     // Power on ADC and calibrate
     adc_power_on(ADC1);
     adc_reset_calibration(ADC1);
@@ -153,10 +183,9 @@ void prvSetupTasks(void)
         while (1);
     }
     xTaskCreate(xTaskLedSwitching, "LED_Switching", configMINIMAL_STACK_SIZE, tskLED_PRIORITY, 1, NULL);
-    xTaskCreate(
-        xTaskGroundHumidity, "GroundHumidityMonitor", configMINIMAL_STACK_SIZE, tskGROUND_HUMIDITY_PRIORITY, 1, NULL);
+    xTaskCreate(xTaskAnalogRead, "GroundHumidityMonitor", configMINIMAL_STACK_SIZE, tskANALOG_READ_PRIORITY, 1, NULL);
     xTaskCreate(xTaskSendMessage, "SendMessage", configMINIMAL_STACK_SIZE, tskCOMMUNICATION_PRIORITY, 1, NULL);
-    xTaskCreate(xTaskTemperature, "TemperatureMonitor", configMINIMAL_STACK_SIZE, tskTEMPERATURE_PRIORITY, 1, NULL);
+    xTaskCreate(xTaskRainfall, "RainfallMonitor", configMINIMAL_STACK_SIZE, tskRAIN_GAUGE_PRIORITY, 1, NULL);
     xTaskCreate(xTaskCreateReport, "CreateReport", configMINIMAL_STACK_SIZE, tskCOMMUNICATION_PRIORITY, 1, NULL);
     xTaskCreate(
         xTaskProcessMessage, "ProcessMessageInputs", COMMUNICATION_TASK_STACK_SIZE, tskCOMMUNICATION_PRIORITY, 1, NULL);
@@ -201,9 +230,8 @@ void xTaskLedSwitching(void* args __attribute__((unused)))
     }
 }
 
-void xTaskGroundHumidity(void* args __attribute__((unused)))
+void xTaskAnalogRead(void* args __attribute__((unused)))
 {
-    char message[BUFFER_MESSAGE_SIZE];
     while (true)
     {
         ground_humidity = 0.0;
@@ -212,7 +240,45 @@ void xTaskGroundHumidity(void* args __attribute__((unused)))
             ground_humidity += ((ADC_FULL_SCALE - adc_buffer[i]) / ADC_FULL_SCALE) * 100;
         }
         ground_humidity /= BUFFER_SIZE;
+        temperature = 0.0;
+        for (int i = ADC_CHANNEL_TEMPERATURE; i < ADC_BUFFER_TOTAL_SIZE; i += NUMBER_OF_ADC_CHANNELS)
+        {
+            temperature += adc_buffer[i];
+        }
+        temperature = (MAX_TEMP * temperature) / (ADC_TEMP_MAX_VALUE * BUFFER_SIZE);
+        uint16_t duty_cycle = mapTemperatureToDutyCycle(temperature);
+        updatePWM(duty_cycle);
+        wind_speed = 0.0;
+        for (int i = ADC_CHANNEL_WIND; i < ADC_BUFFER_TOTAL_SIZE; i += NUMBER_OF_ADC_CHANNELS)
+        {
+            wind_speed += adc_buffer[i];
+        }
+        wind_speed = (wind_speed / (BUFFER_SIZE * MAX_WIND_VALUE_ANALOG)) * MAX_WIND_SPEED;
         vTaskDelay(pdMS_TO_TICKS(MEASURE_DELAY));
+    }
+}
+
+void xTaskRainfall(void* args __attribute__((unused)))
+{
+    water_level = 0.0;
+    while (true)
+    {
+        water_level = 0.0;
+        for (int i = ADC_CHANNEL_WATER_LEVEL; i < ADC_BUFFER_TOTAL_SIZE; i += NUMBER_OF_ADC_CHANNELS)
+        {
+            water_level += adc_buffer[i];
+        }
+        water_level = (ADC_FULL_SCALE - (water_level / BUFFER_SIZE)) * WATER_SENSOR_K;
+        if ((water_level - old_water_level)>NATURAL_DRAINAGE_PER_HOUR)
+        {
+            rainfall = (water_level - old_water_level-NATURAL_DRAINAGE_PER_HOUR);
+        }
+        else
+        {
+            rainfall = 0;
+        }
+        old_water_level = water_level;
+        vTaskDelay(pdMS_TO_TICKS(HOUR_IN_MS));
     }
 }
 
@@ -223,7 +289,7 @@ void xTaskSendMessage(void* args __attribute__((unused)))
     {
         if (xQueueReceive(xUartSendQueue, message, portMAX_DELAY) == pdTRUE)
         {
-            printf("%s\n", message);            
+            printf("%s\n", message);
         }
     }
 }
@@ -247,25 +313,16 @@ void xTaskCreateReport(void* args __attribute__((unused)))
         strncat(message, float_to_string(temperature, NUMBER_OF_DECIMALS), sizeof(message));
         strncat(message, " C", sizeof(message));
         xQueueSend(xUartSendQueue, message, portMAX_DELAY);
+        sprintf(message, "Rain gauge: ");
+        strncat(message, float_to_string(rainfall, NUMBER_OF_DECIMALS), sizeof(message));
+        strncat(message, " mm", sizeof(message));
+        xQueueSend(xUartSendQueue, message, portMAX_DELAY);
+        sprintf(message, "Wind speed: ");
+        strncat(message, float_to_string(wind_speed, NUMBER_OF_DECIMALS), sizeof(message));
+        strncat(message, " m/s", sizeof(message));
+        xQueueSend(xUartSendQueue, message, portMAX_DELAY);
         xSemaphoreGive(xCommunicationSemaphore);
         vTaskDelay(pdMS_TO_TICKS(REPORT_DELAY));
-    }
-}
-
-void xTaskTemperature(void* args __attribute__((unused)))
-{
-    char message[BUFFER_MESSAGE_SIZE];
-    while (true)
-    {
-        temperature = 0.0;
-        for (int i = ADC_CHANNEL_TEMPERATURE; i < ADC_BUFFER_TOTAL_SIZE; i += NUMBER_OF_ADC_CHANNELS)
-        {
-            temperature += adc_buffer[i];
-        }
-        temperature = (MAX_TEMP * temperature) / (ADC_TEMP_MAX_VALUE * BUFFER_SIZE);
-        uint16_t duty_cycle = mapTemperatureToDutyCycle(temperature);
-        updatePWM(duty_cycle);
-        vTaskDelay(pdMS_TO_TICKS(MEASURE_DELAY));
     }
 }
 
@@ -357,7 +414,6 @@ void usart1_isr(void)
         if (received_char == '\n' || received_char == '\r' || uart_buffer_index >= UART_BUFFER_SIZE - 1)
         {
 
-
             uart_buffer_index = 0;
             xQueueSendFromISR(xUartReceiveQueue, &uart_buffer, xHigherPriorityTaskWoken);
             portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
@@ -365,7 +421,6 @@ void usart1_isr(void)
             {
                 uart_buffer[i] = 0;
             }
-            
         }
         else
         {
@@ -467,7 +522,6 @@ void xTaskProcessMessage(void* args __attribute__((unused)))
                     xSemaphoreGive(xCommunicationSemaphore);
                 }
             }
-            
         }
     }
 }
