@@ -6,9 +6,11 @@
 float ground_humidity;
 float temperature;
 volatile uint16_t adc_buffer[ADC_BUFFER_TOTAL_SIZE];
-static QueueHandle_t xUartQueue;
+static QueueHandle_t xUartSendQueue;
+static QueueHandle_t xUartReceiveQueue;
 // semaphore for uart queue
 SemaphoreHandle_t xCommunicationSemaphore;
+SemaphoreHandle_t xTimeSemaphore;
 struct timekeeper time, sunset, sunrise = {0, 0, 0};
 uint8_t sun_debounce_flag = 0;
 TaskHandle_t xFireHandler = NULL;
@@ -138,22 +140,26 @@ void prvSetupHardware(void)
 
 void prvSetupTasks(void)
 {
-    xUartQueue = xQueueCreate(10, BUFFER_MESSAGE_SIZE);
+
+    xUartReceiveQueue = xQueueCreate(10, BUFFER_MESSAGE_SIZE);
+    xUartSendQueue = xQueueCreate(10, BUFFER_MESSAGE_SIZE);
     xCommunicationSemaphore = xSemaphoreCreateBinary();
     xSemaphoreGive(xCommunicationSemaphore);
-    if (xUartQueue == NULL)
+    if (xUartSendQueue == NULL || xUartReceiveQueue == NULL)
     {
 #ifdef DEBUG_BUILD
         printf("Queue creation failed\n");
 #endif
         while (1);
     }
-    // xTaskCreate(xTaskLedSwitching, "LED_Switching", configMINIMAL_STACK_SIZE, tskLED_PRIORITY, 1, NULL);
+    xTaskCreate(xTaskLedSwitching, "LED_Switching", configMINIMAL_STACK_SIZE, tskLED_PRIORITY, 1, NULL);
     xTaskCreate(
         xTaskGroundHumidity, "GroundHumidityMonitor", configMINIMAL_STACK_SIZE, tskGROUND_HUMIDITY_PRIORITY, 1, NULL);
     xTaskCreate(xTaskSendMessage, "SendMessage", configMINIMAL_STACK_SIZE, tskCOMMUNICATION_PRIORITY, 1, NULL);
     xTaskCreate(xTaskTemperature, "TemperatureMonitor", configMINIMAL_STACK_SIZE, tskTEMPERATURE_PRIORITY, 1, NULL);
     xTaskCreate(xTaskCreateReport, "CreateReport", configMINIMAL_STACK_SIZE, tskCOMMUNICATION_PRIORITY, 1, NULL);
+    xTaskCreate(
+        xTaskProcessMessage, "ProcessMessageInputs", COMMUNICATION_TASK_STACK_SIZE, tskCOMMUNICATION_PRIORITY, 1, NULL);
 }
 
 void xtaskFireAlarm(void* args __attribute__((unused)))
@@ -167,7 +173,7 @@ void xtaskFireAlarm(void* args __attribute__((unused)))
         strncat(message, float_to_string(temperature, NUMBER_OF_DECIMALS), sizeof(message));
         if (xSemaphoreTake(xCommunicationSemaphore, portMAX_DELAY) == pdTRUE)
         {
-            xQueueSend(xUartQueue, message, portMAX_DELAY);
+            xQueueSend(xUartSendQueue, message, portMAX_DELAY);
             xSemaphoreGive(xCommunicationSemaphore);
         }
         if (fire_alarm_times_counter > FIRE_ALARM_REPEATS && gpio_get(GPIOA, GPIO2))
@@ -188,7 +194,6 @@ void xTaskLedSwitching(void* args __attribute__((unused)))
 
         gpio_toggle(GPIOC, GPIO13);
 
-        printf("LED toggled\n");
         if (ground_humidity > 0)
         {
             vTaskDelay(pdMS_TO_TICKS((ground_humidity / 100) * SECOND_DELAY));
@@ -216,9 +221,9 @@ void xTaskSendMessage(void* args __attribute__((unused)))
     char message[BUFFER_MESSAGE_SIZE];
     while (true)
     {
-        if (xQueueReceive(xUartQueue, message, portMAX_DELAY) == pdTRUE)
+        if (xQueueReceive(xUartSendQueue, message, portMAX_DELAY) == pdTRUE)
         {
-            printf("%s\n", message);
+            printf("%s\n", message);            
         }
     }
 }
@@ -230,18 +235,18 @@ void xTaskCreateReport(void* args __attribute__((unused)))
     {
         xSemaphoreTake(xCommunicationSemaphore, portMAX_DELAY);
         sprintf(message, "Sunrise: %s ", get_time(sunrise));
-        xQueueSend(xUartQueue, message, portMAX_DELAY);
+        xQueueSend(xUartSendQueue, message, portMAX_DELAY);
         sprintf(message, "Sunset: %s ", get_time(sunset));
-        xQueueSend(xUartQueue, message, portMAX_DELAY);
+        xQueueSend(xUartSendQueue, message, portMAX_DELAY);
 
         sprintf(message, "Ground humidity: ");
         strncat(message, float_to_string(ground_humidity, NUMBER_OF_DECIMALS), sizeof(message));
         strncat(message, "%", sizeof(message));
-        xQueueSend(xUartQueue, message, portMAX_DELAY);
+        xQueueSend(xUartSendQueue, message, portMAX_DELAY);
         sprintf(message, "Temperature: ");
         strncat(message, float_to_string(temperature, NUMBER_OF_DECIMALS), sizeof(message));
         strncat(message, " C", sizeof(message));
-        xQueueSend(xUartQueue, message, portMAX_DELAY);
+        xQueueSend(xUartSendQueue, message, portMAX_DELAY);
         xSemaphoreGive(xCommunicationSemaphore);
         vTaskDelay(pdMS_TO_TICKS(REPORT_DELAY));
     }
@@ -339,47 +344,32 @@ char* get_time(struct timekeeper printtime)
 {
     static char time_str[TIME_STRING_SIZE];
     snprintf(time_str, sizeof(time_str), "%02d:%02d:%02d", printtime.hours, printtime.minutes, printtime.seconds);
+
     return time_str;
 }
 
 void usart1_isr(void)
 {
+    static BaseType_t xHigherPriorityTaskWoken;
     if (usart_get_flag(USART1, USART_SR_RXNE))
     {
         char received_char = usart_recv(USART1);
-        while (!(received_char == '\n' || uart_buffer_index >= UART_BUFFER_SIZE - 1))
+        if (received_char == '\n' || received_char == '\r' || uart_buffer_index >= UART_BUFFER_SIZE - 1)
         {
-            received_char = usart_recv(USART1);
-            uart_buffer[uart_buffer_index++] = received_char;
-        }
-        uart_buffer[uart_buffer_index] = '\0';
-        uart_buffer_index = 0;
-        // Process the received message
-        process_received_message();
-    }
-}
 
-void process_received_message()
-{
-    if (strncmp(uart_buffer, "clk", 3) == 0)
-    {
-        int hours, minutes, seconds;
-        // Extract the next 6 characters and parse them as HHMMSS
-        if (sscanf(uart_buffer + 3, "%02d%02d%02d", &hours, &minutes, &seconds) == 3)
+
+            uart_buffer_index = 0;
+            xQueueSendFromISR(xUartReceiveQueue, &uart_buffer, xHigherPriorityTaskWoken);
+            portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
+            for (int i = 0; i < UART_BUFFER_SIZE; i++)
+            {
+                uart_buffer[i] = 0;
+            }
+            
+        }
+        else
         {
-            // Update the clock variables
-            if (hours < 24)
-            {
-                time.hours = hours;
-            }
-            if (minutes < 60)
-            {
-                time.minutes = minutes;
-            }
-            if (seconds < 60)
-            {
-                time.seconds = seconds;
-            }
+            uart_buffer[uart_buffer_index++] = received_char;
         }
     }
 }
@@ -413,6 +403,7 @@ void tim3_isr()
         timer_clear_flag(TIM3, TIM_SR_UIF);
         if (sun_debounce_flag == 1)
         {
+
             if (gpio_get(GPIOA, GPIO3)) // sensor send high signal when it is dark
             {
                 sunset = time;
@@ -434,4 +425,49 @@ char* float_to_string(float f, int number_of_decimals)
     int decimal = (int)((f - whole) * 10 * number_of_decimals);
     sprintf(buffer, "%d.%d", whole, decimal);
     return buffer;
+}
+
+void xTaskProcessMessage(void* args __attribute__((unused)))
+{
+    char message[BUFFER_MESSAGE_SIZE];
+    while (true)
+    {
+        if (xQueueReceive(xUartReceiveQueue, message, portMAX_DELAY) == pdTRUE)
+        {
+            if (strncmp((const char*)message, "clk", 3) == 0)
+            {
+                int hours, minutes, seconds;
+                // Extract the next 6 characters and parse them as HHMMSS
+                if (sscanf((const char*)message + 3, "%02d%02d%02d", &hours, &minutes, &seconds) == 3)
+                {
+
+                    // Update the clock variables
+                    if (hours < 24)
+                    {
+                        time.hours = hours;
+                    }
+                    if (minutes < 60)
+                    {
+                        time.minutes = minutes;
+                    }
+                    if (seconds < 60)
+                    {
+                        time.seconds = seconds;
+                    }
+                }
+            }
+            else
+            {
+                if (strncmp((const char*)message, "rclk", 4) == 0)
+                {
+                    // reports the clock time via UART
+                    sprintf(message, "System time: %s ", get_time(time));
+                    xSemaphoreTake(xCommunicationSemaphore, portMAX_DELAY);
+                    xQueueSend(xUartSendQueue, message, portMAX_DELAY);
+                    xSemaphoreGive(xCommunicationSemaphore);
+                }
+            }
+            
+        }
+    }
 }

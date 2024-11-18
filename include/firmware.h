@@ -21,7 +21,6 @@ int _write(int file, char* ptr, int len);
 #include "task.h"
 #include "timers.h"
 
-
 #include <libopencm3/cm3/nvic.h>
 #include <libopencm3/stm32/adc.h>
 #include <libopencm3/stm32/dma.h>
@@ -163,3 +162,9 @@ void xTaskCreateReport(void* args __attribute__((unused)));
  * @param number_of_decimals Number of decimals to be used
  */
 char* float_to_string(float f, int number_of_decimals);
+
+/**
+ * @brief Function to process messages recieved via UART
+ * @param args Task arguments (not used)
+ */
+void xTaskProcessMessage(void* args __attribute__((unused)));
