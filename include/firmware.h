@@ -65,10 +65,10 @@ int _write(int file, char* ptr, int len);
 #define COMMUNICATION_TASK_STACK_SIZE 256
 #define WATER_SENSOR_K                0.001924 // mm of water per Volt
 #define ANEMOMETER_K                  18.361   // m/s per Volt
-#define HOUR_IN_MS                    60000 //lower for testing purposes, actual value 1000ms*60s*60min
+#define HOUR_IN_MS                    60000    // lower for testing purposes, actual value 1000ms*60s*60min
 #define MAX_WIND_VALUE_ANALOG         2482
 #define MAX_WIND_SPEED                50 // m/s
-#define NATURAL_DRAINAGE_PER_HOUR     1 // mm
+#define NATURAL_DRAINAGE_PER_HOUR     1  // mm
 /* PWM definitions */
 #define MIN_TEMPERATURE 20.0
 #define MAX_TEMPERATURE 60.0
@@ -101,32 +101,40 @@ void prvSetupHardware(void);
 void prvSetupTasks(void);
 
 /* ------------------ Task Definitions --------------*/
-
-void xTaskLedSwitching(void* args __attribute__((unused)));
-void xTaskGroundHumidity(void* args __attribute__((unused)));
 /**
- * @brief Task to send messages over UART, checks if there's a message in the queue and sends it
+ * @brief Task to process messages received over UART
  * @param args Task arguments (not used)
+ * @return void
+ */
+void xTaskProcessMessage(void* args __attribute__((unused)));
+/**
+ * @brief Task to send messages produced by other tasks over UART
+ * @param args Task arguments (not used)
+ * @return void
  */
 void xTaskSendMessage(void* args __attribute__((unused)));
 /**
  * @brief Function to update Timer1 OC value to change PWM duty cycle
  * @param duty_cycle Duty cycle value to be set
+ * @return void
  */
 void updatePWM(uint16_t duty_cycle);
 /**
  * @brief Function to map temperature to PWM duty cycle, linear mapping between MIN_TEMPERATURE and MAX_TEMPERATURE
  * @param temperature Temperature value to be mapped
+ * @return uint16_t Duty cycle value
  */
 uint16_t mapTemperatureToDutyCycle(float temperature);
 /**
  * @brief Function to process received message from UART
  * Currently parses checking for 'clk' to update time
+ * and 'rclk' to report the current time
  */
 void process_received_message(void);
 /**
  * @brief function to create a string with the current time
  * @param time Timekeeper struct with time values to be converted to string
+ * @return char* Pointer to the string
  */
 char* get_time(struct timekeeper time);
 
@@ -134,14 +142,31 @@ char* get_time(struct timekeeper time);
  * @brief Task to create fire SOS messages and send them over UART
  * Fire alarm dies once it's triggered enough time and fire is not detected
  * @param args Task arguments (not used)
+ * @return void
  */
 void xtaskFireAlarm(void* args __attribute__((unused)));
 
 /**
  * @brief Task to create a report with the current time and send it over UART
  * @param args Task arguments (not used)
+ * @return void
  */
 void xTaskCreateReport(void* args __attribute__((unused)));
+
+/**
+ * @brief Task to read the water level and determine rainfall
+ * @param args Task arguments (not used)
+ * @return void
+ */
+void xTaskRainfall(void* args __attribute__((unused)));
+
+/**
+ * @brief Task to read the ground humidity, wind speed and temperature, updating pwm duty cycle based on adc buffer
+ * values
+ * @param args Task arguments (not used)
+ * @return void
+ */
+void xTaskAnalogRead(void* args __attribute__((unused)));
 
 /**
  * @brief function that takes a float and converts it to a string
@@ -149,41 +174,63 @@ void xTaskCreateReport(void* args __attribute__((unused)));
  * in the returned array
  * @param f Float value to be converted
  * @param number_of_decimals Number of decimals to be used
+ * @return char* Pointer to the string
  */
 char* float_to_string(float f, int number_of_decimals);
 
 /**
- * @brief Function to process messages recieved via UART
+ * @brief Task to initiate timer1, used for PWM
  * @param args Task arguments (not used)
+ * @return void
  */
-void xTaskProcessMessage(void* args __attribute__((unused)));
+void timer1_config(void);
+
 /**
- * @brief Task to monitor ground humidity, gathered by the ADC and transferred to memory by DMA
+ * @brief Task to configure dma for ADC
  * @param args Task arguments (not used)
- * | Humidity | Voltage | ADC Value |
- * |----------|---------|-----------|
- * | 0%       | 3.3V    | 4096      |
- * | 100%     | 0V      | 0         |
- *
- *  | Temperature | Voltage | ADC Value |
- *  |-------------|---------|-----------|
- *  | 0º C        | 0V      | 0         |
- *  | 150 ºC      | 1.5V    | 1861      |
- *
- *
- * | Wind speed | Voltage | ADC Value |
- * |------------|---------|-----------|
- * | 0 m/s      | 0V      | 0         |
- * | 50 m/s     | 2V      | 2482      |
+ * @return void
  */
-void xTaskAnalogRead(void* args __attribute__((unused)));
+void dma_config(void);
 /**
- * @brief Task to measure water level every hour and calculate rainfall
- * Uses the water level variation to calculate rainfall, if the water level decreases, it means it rained
+ * @brief Task to configure internal clock and enable peripheral clocks
  * @param args Task arguments (not used)
- * | Rain gauge | Voltage | ADC Value |
- * |------------|---------|-----------|
- * | 0 mm       | 3.3V    | 4096      |
- * | 5 mm       | 0V      | 0         |
+ * @return void
  */
-void xTaskRainfall(void* args __attribute__((unused)));
+void internal_clock_setup(void);
+/**
+ * @brief Task to configure GPIO
+ * @param args Task arguments (not used)
+ * @return void
+ */
+
+void gpio_config(void);
+
+/**
+ * @brief Task to configure EXTI
+ * configures EXTI on PA3 and PA2
+ */
+void exti_setup(void);
+
+/**
+ * @brief Task to configure timer3
+ * Configures timer3 to trigger after a second to debounce a digital input, can also be used to avoid overwriting
+ * earliest detected value by extending the time
+ */
+void timer3_config(void);
+
+/**
+ * @brief Task to configure USART
+ * Configures USART1 to 115200 baud rate, 8 bit word length, no parity, 1 stop bit
+ */
+void usart_config(void);
+
+/**
+ * @brief Task to configure ADC
+ * Configures ADC1 to read from 4 channels, with a buffer of 64 samples for each channel
+ */
+void adc_setup(void);
+/**
+ * @brief Task to configure timer2
+ * Configures timer2 to trigger every second to keep track of system time
+ */
+void timer2_config(void);
