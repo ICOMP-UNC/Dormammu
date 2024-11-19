@@ -58,7 +58,7 @@ void prvSetupTasks(void)
 #ifdef DEBUG_BUILD
         printf("Queue creation failed\n");
 #endif
-        while (1);
+        while (true);
     }
     xTaskCreate(xTaskAnalogRead, "GroundHumidityMonitor", configMINIMAL_STACK_SIZE, tskANALOG_READ_PRIORITY, 1, NULL);
     xTaskCreate(xTaskSendMessage, "SendMessage", configMINIMAL_STACK_SIZE, tskCOMMUNICATION_PRIORITY, 1, NULL);
