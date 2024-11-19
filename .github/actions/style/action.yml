@@ -16,13 +16,14 @@ runs:
         # We only make check, not changes
         PROJECT_PATH=$(pwd)
         SOURCE_FILES=$(find $PROJECT_PATH/src -type f \( -name "*.cpp" -or -name "*.hpp" -or -name "*.h" -or -name "*.c" \) | tr "\n" " ")
+        SOURCE_FILES+=" "
         SOURCE_FILES+=$(find $PROJECT_PATH/include -type f \( -name "*.cpp" -or -name "*.hpp" -or -name "*.h" -or -name "*.c" \) | tr "\n" " ")
 
         ERROR_FILE_FLAG=$PROJECT_PATH/clang_format_errors.txt
 
         echo "Running: clang-format -n $SOURCE_FILES"
 
-        CLANG_COMMAND=$(clang-format -n $SOURCE_FILES 2> ${ERROR_FILE_FLAG}) 
+        CLANG_COMMAND=$(clang-format -n $SOURCE_FILES 2> ${ERROR_FILE_FLAG})
 
         if [ -s $ERROR_FILE_FLAG ]; then
             echo "Error: There are some files that are not formatted correctly"

@@ -3,18 +3,42 @@
  */
 
 #include <firmware.h>
-float ground_humidity, temperature, water_level, wind_speed, old_water_level, rainfall;
+/** @brief Ground humidity value, also used as an accumulator when updating the value */
+float ground_humidity;
+/** @brief Temperature value, also used as an accumulator when updating the value */
+float temperature;
+/** @brief Water level value, derived from adc and used to calculate precipitation */
+float water_level;
+/** @brief Wind speed value, derived from adc */
+float wind_speed;
+/** @brief Old water level value, used as a baseline to calculate precipitation */
+float old_water_level;
+/** @brief Precipitation value, calculated with water level values and time */
+float precipitation;
+/** @brief ADC buffer holding all channel values transported by DMA */
 volatile uint16_t adc_buffer[ADC_BUFFER_TOTAL_SIZE];
+/** @brief Queue for sending data through UART */
 static QueueHandle_t xUartSendQueue;
+/** @brief Queue for receiving data through UART */
 static QueueHandle_t xUartReceiveQueue;
-// semaphore for uart queue
+/** @brief Semaphore for outgoing communication through uart */
 SemaphoreHandle_t xCommunicationSemaphore;
-SemaphoreHandle_t xTimeSemaphore;
+/** @brief Timekeeper struct to hold system time */
 struct timekeeper time, sunset, sunrise = {0, 0, 0};
+/** @brief Flag to recognize the input waiting for debounce */
 uint8_t sun_debounce_flag = 0;
+/** @brief Task Handle for the fire task, useful for reference when deleting the task */
 TaskHandle_t xFireHandler = NULL;
+/** @brief Char buffer used for incoming communication */
 volatile char uart_buffer[UART_BUFFER_SIZE];
+/** @brief Index for the uart buffer */
 volatile uint8_t uart_buffer_index = 0;
+
+/**
+ * @brief Hook function for handling stack overflow.
+ * @param xTask Handle of the task that caused the stack overflow.
+ * @param pcTaskName Name of the task that caused the stack overflow.
+ */
 void vApplicationStackOverflowHook(TaskHandle_t xTask __attribute__((unused)), char* pcTaskName __attribute__((unused)))
 {
     (void)xTask;
@@ -29,143 +53,21 @@ void vApplicationStackOverflowHook(TaskHandle_t xTask __attribute__((unused)), c
 
 void prvSetupHardware(void)
 {
-    // Set up system clock at the defined frequency
-    rcc_clock_setup_pll(&rcc_hse_configs[PLL_CLOCK]);
-
-    // Enable peripheral clocks
-    rcc_periph_clock_enable(RCC_GPIOC);
-    rcc_periph_clock_enable(RCC_GPIOB);
-    rcc_periph_clock_enable(RCC_GPIOA);
-    rcc_periph_clock_enable(RCC_ADC1);
-    rcc_periph_clock_enable(RCC_AFIO);
-    rcc_periph_clock_enable(RCC_USART1);
-    rcc_periph_clock_enable(RCC_DMA1);
-    rcc_periph_clock_enable(RCC_TIM1);
-
+    internal_clock_setup();
     // Clock timer config
-    timer_set_mode(TIM2, TIM_CR1_CKD_CK_INT, TIM_CR1_CMS_EDGE, TIM_CR1_DIR_UP);
-    rcc_periph_clock_enable(RCC_TIM2);
-    timer_set_prescaler(TIM2, TIMER_PRESCALE_VALUE);
-    timer_set_period(TIM2, TIMER_PERIOD_1S);
-    nvic_enable_irq(NVIC_TIM2_IRQ);
-    timer_enable_irq(TIM2, TIM_DIER_UIE);
-    timer_enable_counter(TIM2);
-
+    timer2_config();
     // TIMER1 config for PWM
-    rcc_periph_reset_pulse(RST_TIM1);
-    timer_set_mode(TIM1, TIM_CR1_CKD_CK_INT, TIM_CR1_CMS_EDGE, TIM_CR1_DIR_UP);
-    timer_set_prescaler(TIM1, TIMER_PRESCALE_VALUE);
-    timer_set_period(TIM1, PWM_TIMER_PERIOD);
-    timer_set_oc_mode(TIM1, TIM_OC1, TIM_OCM_PWM1);
-    timer_set_oc_value(TIM1, TIM_OC1, DUTY_CYCLE_START);
-    timer_set_oc_polarity_high(TIM1, TIM_OC1);
-    timer_enable_break_main_output(TIM1);
-    timer_enable_oc_output(TIM1, TIM_OC1);
-    timer_enable_preload(TIM1);
-    timer_enable_counter(TIM1);
-
+    timer1_config();
     // GPIO config
-    gpio_set_mode(GPIOA, GPIO_MODE_INPUT, GPIO_CNF_INPUT_ANALOG, GPIO0 | GPIO1);
-    gpio_set_mode(GPIOC, GPIO_MODE_OUTPUT_2_MHZ, GPIO_CNF_OUTPUT_PUSHPULL, GPIO13);
-    gpio_set_mode(GPIOA, GPIO_MODE_OUTPUT_50_MHZ, GPIO_CNF_OUTPUT_ALTFN_PUSHPULL, GPIO8);
-    gpio_set_mode(GPIOB, GPIO_MODE_INPUT, GPIO_CNF_INPUT_ANALOG, GPIO0 | GPIO1);
-
+    gpio_config();
     // DMA config
-    dma_channel_reset(DMA1, DMA_CHANNEL1);
-    dma_set_priority(DMA1, DMA_CHANNEL1, DMA_CCR_PL_VERY_HIGH);
-    dma_set_peripheral_address(DMA1, DMA_CHANNEL1, (uint32_t)&ADC_DR(ADC1));
-    dma_set_memory_address(DMA1, DMA_CHANNEL1, (uint32_t)adc_buffer);
-    dma_set_number_of_data(DMA1, DMA_CHANNEL1, ADC_BUFFER_TOTAL_SIZE);
-    dma_set_memory_size(DMA1, DMA_CHANNEL1, DMA_CCR_MSIZE_16BIT);
-    dma_set_peripheral_size(DMA1, DMA_CHANNEL1, DMA_CCR_PSIZE_16BIT);
-    dma_enable_circular_mode(DMA1, DMA_CHANNEL1);
-    dma_set_read_from_peripheral(DMA1, DMA_CHANNEL1);
-    dma_enable_memory_increment_mode(DMA1, DMA_CHANNEL1);
-    dma_enable_channel(DMA1, DMA_CHANNEL1);
-    /*
-        dma_set_peripheral_address(DMA1, DMA_CHANNEL2, (uint32_t)&ADC_DR(ADC1));
-        dma_set_memory_address(DMA1, DMA_CHANNEL2, (uint32_t)adc_buffer);
-        dma_set_number_of_data(DMA1, DMA_CHANNEL2, ADC_BUFFER_TOTAL_SIZE);
-        dma_set_memory_size(DMA1, DMA_CHANNEL2, DMA_CCR_MSIZE_16BIT);
-        dma_set_peripheral_size(DMA1, DMA_CHANNEL2, DMA_CCR_PSIZE_16BIT);
-        dma_enable_circular_mode(DMA1, DMA_CHANNEL2);
-        dma_set_read_from_peripheral(DMA1, DMA_CHANNEL2);
-        dma_enable_memory_increment_mode(DMA1, DMA_CHANNEL2);
-        dma_enable_channel(DMA1, DMA_CHANNEL2);
-        dma_set_peripheral_address(DMA1, DMA_CHANNEL3, (uint32_t)&ADC_DR(ADC1));
-        dma_set_memory_address(DMA1, DMA_CHANNEL3, (uint32_t)adc_buffer);
-        dma_set_number_of_data(DMA1, DMA_CHANNEL3, ADC_BUFFER_TOTAL_SIZE);
-        dma_set_memory_size(DMA1, DMA_CHANNEL3, DMA_CCR_MSIZE_16BIT);
-        dma_set_peripheral_size(DMA1, DMA_CHANNEL3, DMA_CCR_PSIZE_16BIT);
-        dma_enable_circular_mode(DMA1, DMA_CHANNEL3);
-        dma_set_read_from_peripheral(DMA1, DMA_CHANNEL3);
-        dma_enable_memory_increment_mode(DMA1, DMA_CHANNEL3);
-        dma_enable_channel(DMA1, DMA_CHANNEL3);
-        dma_set_peripheral_address(DMA1, DMA_CHANNEL4, (uint32_t)&ADC_DR(ADC1));
-        dma_set_memory_address(DMA1, DMA_CHANNEL4, (uint32_t)adc_buffer);
-        dma_set_number_of_data(DMA1, DMA_CHANNEL4, ADC_BUFFER_TOTAL_SIZE);
-        dma_set_memory_size(DMA1, DMA_CHANNEL4, DMA_CCR_MSIZE_16BIT);
-        dma_set_peripheral_size(DMA1, DMA_CHANNEL4, DMA_CCR_PSIZE_16BIT);
-        dma_enable_circular_mode(DMA1, DMA_CHANNEL4);
-        dma_set_read_from_peripheral(DMA1, DMA_CHANNEL4);
-        dma_enable_memory_increment_mode(DMA1, DMA_CHANNEL4);
-        dma_enable_channel(DMA1, DMA_CHANNEL4);
-    */
+    dma_config();
     /* USART config*/
-    gpio_set_mode(GPIOA, GPIO_MODE_OUTPUT_50_MHZ, GPIO_CNF_OUTPUT_ALTFN_PUSHPULL, GPIO_USART1_TX);
-    gpio_set_mode(GPIOA, GPIO_MODE_INPUT, GPIO_CNF_INPUT_FLOAT, GPIO_USART1_RX);
-    usart_set_baudrate(USART1, BAUD_RATE);
-    usart_set_databits(USART1, WORD_LENGTH);
-    usart_set_stopbits(USART1, USART_STOPBITS_1);
-    usart_set_mode(USART1, USART_MODE_TX_RX);
-    usart_set_parity(USART1, USART_PARITY_NONE);
-    usart_set_flow_control(USART1, USART_FLOWCONTROL_NONE);
-    usart_enable_rx_interrupt(USART1);
-    nvic_enable_irq(NVIC_USART1_IRQ);
-    usart_enable(USART1);
+    usart_config();
     // ADC config
-    adc_power_off(ADC1);
-    adc_enable_dma(ADC1);
-    adc_disable_eoc_interrupt(ADC1);
-    adc_enable_scan_mode(ADC1);
-    adc_set_continuous_conversion_mode(ADC1);
-    adc_set_right_aligned(ADC1);
-
-    // Set up ADC channel sequence and sample time
-    const uint8_t adc_channels[NUMBER_OF_ADC_CHANNELS] = {ADC_CHANNEL0, ADC_CHANNEL1, ADC_CHANNEL8, ADC_CHANNEL9};
-    adc_set_regular_sequence(ADC1, NUMBER_OF_ADC_CHANNELS, adc_channels);
-    adc_set_sample_time(ADC1, ADC_CHANNEL0, ADC_SMPR_SMP_55DOT5CYC);
-    adc_set_sample_time(ADC1, ADC_CHANNEL1, ADC_SMPR_SMP_55DOT5CYC);
-    adc_set_sample_time(ADC1, ADC_CHANNEL8, ADC_SMPR_SMP_55DOT5CYC);
-    adc_set_sample_time(ADC1, ADC_CHANNEL9, ADC_SMPR_SMP_55DOT5CYC);
-    // Power on ADC and calibrate
-    adc_power_on(ADC1);
-    adc_reset_calibration(ADC1);
-    adc_calibrate(ADC1);
-    adc_enable_external_trigger_regular(ADC1, ADC_CR2_EXTSEL_SWSTART);
-    adc_start_conversion_regular(ADC1);
-
-    // TIM3 config for ISR rebounding
-    rcc_periph_clock_enable(RCC_TIM3);
-    timer_set_mode(TIM3, TIM_CR1_CKD_CK_INT, TIM_CR1_CMS_EDGE, TIM_CR1_DIR_UP);
-    timer_set_prescaler(TIM3, TIMER_PRESCALE_VALUE);
-    timer_set_period(TIM3, TIMER_PERIOD_1S);
-    timer_enable_irq(TIM3, TIM_DIER_UIE);
-    nvic_enable_irq(NVIC_TIM3_IRQ);
-
-    // exti_setup on PA3
-    gpio_set_mode(GPIOA, GPIO_MODE_INPUT, GPIO_CNF_INPUT_PULL_UPDOWN, GPIO3);
-    exti_select_source(EXTI3, GPIOA);
-    exti_set_trigger(EXTI3, EXTI_TRIGGER_BOTH);
-    exti_enable_request(EXTI3);
-    nvic_enable_irq(NVIC_EXTI3_IRQ);
-
-    // exti_setup on PA2
-    gpio_set_mode(GPIOA, GPIO_MODE_INPUT, GPIO_CNF_INPUT_PULL_UPDOWN, GPIO2);
-    exti_select_source(EXTI2, GPIOA);
-    exti_set_trigger(EXTI2, EXTI_TRIGGER_FALLING);
-    exti_enable_request(EXTI2);
-    nvic_enable_irq(NVIC_EXTI2_IRQ);
+    adc_setup();
+    timer3_config();
+    exti_setup();
 }
 
 void prvSetupTasks(void)
@@ -180,9 +82,10 @@ void prvSetupTasks(void)
 #ifdef DEBUG_BUILD
         printf("Queue creation failed\n");
 #endif
-        while (1);
+        while (true)
+        {
+        }
     }
-    xTaskCreate(xTaskLedSwitching, "LED_Switching", configMINIMAL_STACK_SIZE, tskLED_PRIORITY, 1, NULL);
     xTaskCreate(xTaskAnalogRead, "GroundHumidityMonitor", configMINIMAL_STACK_SIZE, tskANALOG_READ_PRIORITY, 1, NULL);
     xTaskCreate(xTaskSendMessage, "SendMessage", configMINIMAL_STACK_SIZE, tskCOMMUNICATION_PRIORITY, 1, NULL);
     xTaskCreate(xTaskRainfall, "RainfallMonitor", configMINIMAL_STACK_SIZE, tskRAIN_GAUGE_PRIORITY, 1, NULL);
@@ -212,21 +115,6 @@ void xtaskFireAlarm(void* args __attribute__((unused)))
             vTaskDelete(xFireHandler);
         }
         vTaskDelay(pdMS_TO_TICKS(FIRE_ALARM_DELAY));
-    }
-}
-
-void xTaskLedSwitching(void* args __attribute__((unused)))
-{
-    // LED blinks proportionally to ground humidity
-    while (true)
-    {
-
-        gpio_toggle(GPIOC, GPIO13);
-
-        if (ground_humidity > 0)
-        {
-            vTaskDelay(pdMS_TO_TICKS((ground_humidity / 100) * SECOND_DELAY));
-        }
     }
 }
 
@@ -269,13 +157,13 @@ void xTaskRainfall(void* args __attribute__((unused)))
             water_level += adc_buffer[i];
         }
         water_level = (ADC_FULL_SCALE - (water_level / BUFFER_SIZE)) * WATER_SENSOR_K;
-        if ((water_level - old_water_level)>NATURAL_DRAINAGE_PER_HOUR)
+        if ((water_level - old_water_level) > NATURAL_DRAINAGE_PER_HOUR)
         {
-            rainfall = (water_level - old_water_level-NATURAL_DRAINAGE_PER_HOUR);
+            precipitation = (water_level - old_water_level - NATURAL_DRAINAGE_PER_HOUR);
         }
         else
         {
-            rainfall = 0;
+            precipitation = 0;
         }
         old_water_level = water_level;
         vTaskDelay(pdMS_TO_TICKS(HOUR_IN_MS));
@@ -314,7 +202,7 @@ void xTaskCreateReport(void* args __attribute__((unused)))
         strncat(message, " C", sizeof(message));
         xQueueSend(xUartSendQueue, message, portMAX_DELAY);
         sprintf(message, "Rain gauge: ");
-        strncat(message, float_to_string(rainfall, NUMBER_OF_DECIMALS), sizeof(message));
+        strncat(message, float_to_string(precipitation, NUMBER_OF_DECIMALS), sizeof(message));
         strncat(message, " mm", sizeof(message));
         xQueueSend(xUartSendQueue, message, portMAX_DELAY);
         sprintf(message, "Wind speed: ");
@@ -342,7 +230,10 @@ int _write(int file, char* ptr, int len)
     return len;
 }
 #endif
-
+/**
+ * @brief ADC1 ISR to handle the ADC conversion
+ * If the ADC conversion is complete, it clears the interrupt flag
+ */
 void dma1_channel1_isr(void)
 {
     if (dma_get_interrupt_flag(DMA1, DMA_CHANNEL1, DMA_TCIF))
@@ -373,7 +264,10 @@ void updatePWM(uint16_t duty_cycle)
 {
     timer_set_oc_value(TIM1, TIM_OC1, duty_cycle);
 }
-
+/**
+ * @brief Timer2 ISR to keep track of system time
+ * Increments the time struct every second
+ */
 void tim2_isr()
 {
     if (timer_get_flag(TIM2, TIM_SR_UIF))
@@ -404,7 +298,11 @@ char* get_time(struct timekeeper printtime)
 
     return time_str;
 }
-
+/**
+ * @brief USART1 ISR to handle the received messages
+ * If the received character is a newline, carriage return or the buffer is full, it sends the message to the queue to
+ * be processed. If the message is not complete, it appends the character to the buffer
+ */
 void usart1_isr(void)
 {
     static BaseType_t xHigherPriorityTaskWoken;
@@ -428,7 +326,12 @@ void usart1_isr(void)
         }
     }
 }
-
+/**
+ * @brief EXTI3 ISR to handle the sensor input
+ * If the sensor input is triggered, it starts a timer to debounce the input
+ * Clears isr flag and sets the debounce sunlight sensor flag to 1
+ *
+ */
 void exti3_isr()
 {
     if (exti_get_flag_status(EXTI3))
@@ -437,10 +340,13 @@ void exti3_isr()
         timer_enable_counter(TIM3);
         sun_debounce_flag = 1;
         exti_reset_request(EXTI3);
-        gpio_toggle(GPIOC, GPIO13);
     }
 }
-
+/**
+ * @brief EXTI2 ISR to handle the fire alarm
+ * If the fire alarm is triggered, it creates a task to send an SOS message over UART
+ * Clears isr flag and disables the EXTI2 interrupt to avoid multiple triggers while the task is running
+ */
 void exti2_isr()
 {
     if (xFireHandler == NULL)
@@ -451,6 +357,13 @@ void exti2_isr()
     nvic_disable_irq(NVIC_EXTI2_IRQ);
 }
 
+/**
+ * @brief Timer3 ISR to debounce the sensor input
+ * Checks whether the sun is setting or rising based on the sensor input if the sensor input is high it means it is now
+ * dark and the sun is setting, if the sensor input is low it means it is now light and the sun is rising implements a
+ * debounce mechanism to avoid multiple triggers that can be expanded to avoid overwriting the earliest detected value
+ * uses a flag in preparation for future debouncing needs
+ */
 void tim3_isr()
 {
     if (timer_get_flag(TIM3, TIM_SR_UIF))
@@ -524,4 +437,133 @@ void xTaskProcessMessage(void* args __attribute__((unused)))
             }
         }
     }
+}
+
+void timer1_config(void)
+{
+    rcc_periph_reset_pulse(RST_TIM1);
+    timer_set_mode(TIM1, TIM_CR1_CKD_CK_INT, TIM_CR1_CMS_EDGE, TIM_CR1_DIR_UP);
+    timer_set_prescaler(TIM1, TIMER_PRESCALE_VALUE);
+    timer_set_period(TIM1, PWM_TIMER_PERIOD);
+    timer_set_oc_mode(TIM1, TIM_OC1, TIM_OCM_PWM1);
+    timer_set_oc_value(TIM1, TIM_OC1, DUTY_CYCLE_START);
+    timer_set_oc_polarity_high(TIM1, TIM_OC1);
+    timer_enable_break_main_output(TIM1);
+    timer_enable_oc_output(TIM1, TIM_OC1);
+    timer_enable_preload(TIM1);
+    timer_enable_counter(TIM1);
+}
+
+void dma_config(void)
+{
+    dma_channel_reset(DMA1, DMA_CHANNEL1);
+    dma_set_priority(DMA1, DMA_CHANNEL1, DMA_CCR_PL_VERY_HIGH);
+    dma_set_peripheral_address(DMA1, DMA_CHANNEL1, (uint32_t)&ADC_DR(ADC1));
+    dma_set_memory_address(DMA1, DMA_CHANNEL1, (uint32_t)adc_buffer);
+    dma_set_number_of_data(DMA1, DMA_CHANNEL1, ADC_BUFFER_TOTAL_SIZE);
+    dma_set_memory_size(DMA1, DMA_CHANNEL1, DMA_CCR_MSIZE_16BIT);
+    dma_set_peripheral_size(DMA1, DMA_CHANNEL1, DMA_CCR_PSIZE_16BIT);
+    dma_enable_circular_mode(DMA1, DMA_CHANNEL1);
+    dma_set_read_from_peripheral(DMA1, DMA_CHANNEL1);
+    dma_enable_memory_increment_mode(DMA1, DMA_CHANNEL1);
+    dma_enable_channel(DMA1, DMA_CHANNEL1);
+}
+void internal_clock_setup(void)
+{
+    // Set up system clock at the defined frequency
+    rcc_clock_setup_pll(&rcc_hse_configs[PLL_CLOCK]);
+
+    // Enable peripheral clocks
+    rcc_periph_clock_enable(RCC_GPIOC);
+    rcc_periph_clock_enable(RCC_GPIOB);
+    rcc_periph_clock_enable(RCC_GPIOA);
+    rcc_periph_clock_enable(RCC_ADC1);
+    rcc_periph_clock_enable(RCC_AFIO);
+    rcc_periph_clock_enable(RCC_USART1);
+    rcc_periph_clock_enable(RCC_DMA1);
+    rcc_periph_clock_enable(RCC_TIM1);
+}
+void gpio_config(void)
+{
+    gpio_set_mode(GPIOA, GPIO_MODE_INPUT, GPIO_CNF_INPUT_ANALOG, GPIO0 | GPIO1);
+    gpio_set_mode(GPIOC, GPIO_MODE_OUTPUT_2_MHZ, GPIO_CNF_OUTPUT_PUSHPULL, GPIO13);
+    gpio_set_mode(GPIOA, GPIO_MODE_OUTPUT_50_MHZ, GPIO_CNF_OUTPUT_ALTFN_PUSHPULL, GPIO8);
+    gpio_set_mode(GPIOB, GPIO_MODE_INPUT, GPIO_CNF_INPUT_ANALOG, GPIO0 | GPIO1);
+}
+
+void exti_setup(void)
+{
+    // exti_setup on PA3
+    gpio_set_mode(GPIOA, GPIO_MODE_INPUT, GPIO_CNF_INPUT_PULL_UPDOWN, GPIO3);
+    exti_select_source(EXTI3, GPIOA);
+    exti_set_trigger(EXTI3, EXTI_TRIGGER_BOTH);
+    exti_enable_request(EXTI3);
+    nvic_enable_irq(NVIC_EXTI3_IRQ);
+
+    // exti_setup on PA2
+    gpio_set_mode(GPIOA, GPIO_MODE_INPUT, GPIO_CNF_INPUT_PULL_UPDOWN, GPIO2);
+    exti_select_source(EXTI2, GPIOA);
+    exti_set_trigger(EXTI2, EXTI_TRIGGER_FALLING);
+    exti_enable_request(EXTI2);
+    nvic_enable_irq(NVIC_EXTI2_IRQ);
+}
+
+void timer3_config(void)
+{
+    // TIM3 config for ISR rebounding
+    rcc_periph_clock_enable(RCC_TIM3);
+    timer_set_mode(TIM3, TIM_CR1_CKD_CK_INT, TIM_CR1_CMS_EDGE, TIM_CR1_DIR_UP);
+    timer_set_prescaler(TIM3, TIMER_PRESCALE_VALUE);
+    timer_set_period(TIM3, TIMER_PERIOD_1S);
+    timer_enable_irq(TIM3, TIM_DIER_UIE);
+    nvic_enable_irq(NVIC_TIM3_IRQ);
+}
+
+void usart_config(void)
+{
+    gpio_set_mode(GPIOA, GPIO_MODE_OUTPUT_50_MHZ, GPIO_CNF_OUTPUT_ALTFN_PUSHPULL, GPIO_USART1_TX);
+    gpio_set_mode(GPIOA, GPIO_MODE_INPUT, GPIO_CNF_INPUT_FLOAT, GPIO_USART1_RX);
+    usart_set_baudrate(USART1, BAUD_RATE);
+    usart_set_databits(USART1, WORD_LENGTH);
+    usart_set_stopbits(USART1, USART_STOPBITS_1);
+    usart_set_mode(USART1, USART_MODE_TX_RX);
+    usart_set_parity(USART1, USART_PARITY_NONE);
+    usart_set_flow_control(USART1, USART_FLOWCONTROL_NONE);
+    usart_enable_rx_interrupt(USART1);
+    nvic_enable_irq(NVIC_USART1_IRQ);
+    usart_enable(USART1);
+}
+
+void adc_setup(void)
+{
+    adc_power_off(ADC1);
+    adc_enable_dma(ADC1);
+    adc_disable_eoc_interrupt(ADC1);
+    adc_enable_scan_mode(ADC1);
+    adc_set_continuous_conversion_mode(ADC1);
+    adc_set_right_aligned(ADC1);
+
+    // Set up ADC channel sequence and sample time
+    const uint8_t adc_channels[NUMBER_OF_ADC_CHANNELS] = {ADC_CHANNEL0, ADC_CHANNEL1, ADC_CHANNEL8, ADC_CHANNEL9};
+    adc_set_regular_sequence(ADC1, NUMBER_OF_ADC_CHANNELS, adc_channels);
+    adc_set_sample_time(ADC1, ADC_CHANNEL0, ADC_SMPR_SMP_55DOT5CYC);
+    adc_set_sample_time(ADC1, ADC_CHANNEL1, ADC_SMPR_SMP_55DOT5CYC);
+    adc_set_sample_time(ADC1, ADC_CHANNEL8, ADC_SMPR_SMP_55DOT5CYC);
+    adc_set_sample_time(ADC1, ADC_CHANNEL9, ADC_SMPR_SMP_55DOT5CYC);
+    // Power on ADC and calibrate
+    adc_power_on(ADC1);
+    adc_reset_calibration(ADC1);
+    adc_calibrate(ADC1);
+    adc_enable_external_trigger_regular(ADC1, ADC_CR2_EXTSEL_SWSTART);
+    adc_start_conversion_regular(ADC1);
+}
+void timer2_config(void)
+{
+    timer_set_mode(TIM2, TIM_CR1_CKD_CK_INT, TIM_CR1_CMS_EDGE, TIM_CR1_DIR_UP);
+    rcc_periph_clock_enable(RCC_TIM2);
+    timer_set_prescaler(TIM2, TIMER_PRESCALE_VALUE);
+    timer_set_period(TIM2, TIMER_PERIOD_1S);
+    nvic_enable_irq(NVIC_TIM2_IRQ);
+    timer_enable_irq(TIM2, TIM_DIER_UIE);
+    timer_enable_counter(TIM2);
 }
