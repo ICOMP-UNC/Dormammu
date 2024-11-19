@@ -11,6 +11,35 @@ on:
       - 1.0.0
 
 jobs:
+  style-check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Run style check
+        uses: ./.github/actions/style
+        with:
+          path: .
+
+  generate-docs:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Install Doxygen
+        run: sudo apt-get install -y doxygen
+
+      - name: Generate Doxygen documentation
+        run: doxygen Doxyfile
+
+      - name: Upload Doxygen documentation
+        uses: actions/upload-artifact@v4
+        with:
+          name: Doxygen Documentation
+          path: docs/html
+
   build:
     runs-on: ubuntu-latest
     steps:
@@ -20,7 +49,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v2
         with:
-          python-version: '3.x'  # Specify the Python version you need
+          python-version: '3.12'
 
       - name: Install PlatformIO
         run: |
