@@ -3,18 +3,42 @@
  */
 
 #include <firmware.h>
-float ground_humidity, temperature, water_level, wind_speed, old_water_level, rainfall;
+/** @brief Ground humidity value, also used as an accumulator when updating the value */
+float ground_humidity;
+/** @brief Temperature value, also used as an accumulator when updating the value */
+float temperature;
+/** @brief Water level value, derived from adc and used to calculate precipitation */
+float water_level;
+/** @brief Wind speed value, derived from adc */
+float wind_speed;
+/** @brief Old water level value, used as a baseline to calculate precipitation */
+float old_water_level;
+/** @brief Precipitation value, calculated with water level values and time */
+float precipitation;
+/** @brief ADC buffer holding all channel values transported by DMA */
 volatile uint16_t adc_buffer[ADC_BUFFER_TOTAL_SIZE];
+/** @brief Queue for sending data through UART */
 static QueueHandle_t xUartSendQueue;
+/** @brief Queue for receiving data through UART */
 static QueueHandle_t xUartReceiveQueue;
-// semaphore for uart queue
+/** @brief Semaphore for outgoing communication through uart */
 SemaphoreHandle_t xCommunicationSemaphore;
-SemaphoreHandle_t xTimeSemaphore;
+/** @brief Timekeeper struct to hold system time */
 struct timekeeper time, sunset, sunrise = {0, 0, 0};
+/** @brief Flag to recognize the input waiting for debounce */
 uint8_t sun_debounce_flag = 0;
+/** @brief Task Handle for the fire task, useful for reference when deleting the task */
 TaskHandle_t xFireHandler = NULL;
+/** @brief Char buffer used for incoming communication */
 volatile char uart_buffer[UART_BUFFER_SIZE];
+/** @brief Index for the uart buffer */
 volatile uint8_t uart_buffer_index = 0;
+
+/**
+ * @brief Hook function for handling stack overflow.
+ * @param xTask Handle of the task that caused the stack overflow.
+ * @param pcTaskName Name of the task that caused the stack overflow.
+ */
 void vApplicationStackOverflowHook(TaskHandle_t xTask __attribute__((unused)), char* pcTaskName __attribute__((unused)))
 {
     (void)xTask;
@@ -135,11 +159,11 @@ void xTaskRainfall(void* args __attribute__((unused)))
         water_level = (ADC_FULL_SCALE - (water_level / BUFFER_SIZE)) * WATER_SENSOR_K;
         if ((water_level - old_water_level) > NATURAL_DRAINAGE_PER_HOUR)
         {
-            rainfall = (water_level - old_water_level - NATURAL_DRAINAGE_PER_HOUR);
+            precipitation = (water_level - old_water_level - NATURAL_DRAINAGE_PER_HOUR);
         }
         else
         {
-            rainfall = 0;
+            precipitation = 0;
         }
         old_water_level = water_level;
         vTaskDelay(pdMS_TO_TICKS(HOUR_IN_MS));
@@ -178,7 +202,7 @@ void xTaskCreateReport(void* args __attribute__((unused)))
         strncat(message, " C", sizeof(message));
         xQueueSend(xUartSendQueue, message, portMAX_DELAY);
         sprintf(message, "Rain gauge: ");
-        strncat(message, float_to_string(rainfall, NUMBER_OF_DECIMALS), sizeof(message));
+        strncat(message, float_to_string(precipitation, NUMBER_OF_DECIMALS), sizeof(message));
         strncat(message, " mm", sizeof(message));
         xQueueSend(xUartSendQueue, message, portMAX_DELAY);
         sprintf(message, "Wind speed: ");
