@@ -1,0 +1,25 @@
+name: "Generate Doxygen Documentation"
+description: "Generate Doxygen documentation for the project"
+
+inputs:
+  doxyfile:
+    required: true
+    description: "Path to the Doxyfile"
+    default: Doxyfile
+
+runs:
+  using: "composite"
+  steps:
+    - name: Install Doxygen
+      shell: bash
+      run: sudo apt-get install -y doxygen
+
+    - name: Generate Doxygen documentation
+      shell: bash
+      run: doxygen ${{ inputs.doxyfile }}
+
+    - name: Upload Doxygen documentation
+      uses: actions/upload-artifact@v4
+      with:
+        name: Doxygen Documentation
+        path: docs/html

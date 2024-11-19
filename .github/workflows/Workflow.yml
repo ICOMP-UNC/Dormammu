@@ -1,0 +1,45 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+      - 1.0.0
+  pull_request:
+    branches:
+      - main
+      - 1.0.0
+
+jobs:
+  style-check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Run style check
+        uses: ./.github/actions/style
+        with:
+          path: .
+
+  arm-build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Run ARM build
+        uses: ./.github/actions/build
+        with:
+          path: .
+
+  generate-docs:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Generate Doxygen documentation
+        uses: ./.github/actions/document
+        with:
+          doxyfile: Doxyfile
