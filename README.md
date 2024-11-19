@@ -13,6 +13,7 @@ Welcome to the Weather Station project! This system utilizes the STM32F103T8 mic
   - LM35: Analog temperature sensor.
   - FC28: Soil moisture and humidity sensor.
   - YL-83: Water level sensor.
+  - QS-FS Anemometer: Simulated with a potentiometer due to budget and availability. Analog output proportional to wind speed.
 - PWM Control: Adjust LED brightness based on temperature.
 - UART Communication: Sends system data over serial (UART) for visualization.
 - I2C : Display data on an external screen using I2C (not implemented, I tried ![image](https://github.com/user-attachments/assets/a73b4e62-6ef2-4379-82b8-3b91bb0a2d59)
@@ -51,6 +52,9 @@ stateDiagram-v2
     CollectingData --> SendingReport : Send Report Data via UART
     SendingReport --> Idle : Report Added to Queue
 ```
+## ☢️ Meet the team
+- It's just [me](https://github.com/fnc8822) 😇
+
 ## 👾 General Notes on Codebase
 Code isn't as modular or feature intense as I would've liked, but does mantain project structure with the following key files:
 - main.c: Entryway to the project, calls a few functions and stays in a loop
